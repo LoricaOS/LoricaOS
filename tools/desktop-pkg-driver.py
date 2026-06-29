@@ -30,12 +30,21 @@ def main():
         (r"admin password: ",                   "administrator\n",                         30),
         (r"admin session active",               "herald install /root/desktop.hpkg\n",     30),
         (r"installed system package desktop",   "cat /etc/aegis/caps.d/lumen\n",           60),
-        (r"THREAD_CREATE PROC_READ POWER",      "",                                        30),
+        # sideload a local app that depends on 'desktop' (now installed) plus
+        # 'lumen-nonexistent' (not installed): herald must warn about ONLY the
+        # missing one — proving deps already present are skipped.
+        (r"THREAD_CREATE PROC_READ POWER",      "herald install /root/deptest.hpkg\n",     30),
+        (r"install it with: herald install lumen-nonexistent", "",                         30),
     ]
     # all of these must appear somewhere in the transcript for a PASS
     must = [r"installed system package desktop",
             r"kernel cap policy \+ anchors reloaded",
-            r"THREAD_CREATE PROC_READ POWER"]
+            r"THREAD_CREATE PROC_READ POWER",
+            r"installed deptest",
+            r"install it with: herald install lumen-nonexistent"]
+    # none of these may appear — 'desktop' is installed, so it must NOT be
+    # listed as a missing prerequisite of deptest.
+    must_not = [r"install it with: herald install desktop"]
     # any of these = immediate FAIL
     fail = [r"SIGNATURE VERIFICATION FAILED", r"install denied", r"install failed",
             r"invalid manifest", r"No such file"]
@@ -94,11 +103,15 @@ def main():
     full = "".join(transcript)
     missing = [m for m in must if not re.search(m, full)]
     hit_fail = [f for f in fail if re.search(f, full)]
+    hit_forbidden = [m for m in must_not if re.search(m, full)]
     if missing:
         print(f"\n[driver] FAIL — missing markers: {missing}", flush=True)
         ok = False
     if hit_fail:
         print(f"\n[driver] FAIL — error markers present: {hit_fail}", flush=True)
+        ok = False
+    if hit_forbidden:
+        print(f"\n[driver] FAIL — forbidden markers present: {hit_forbidden}", flush=True)
         ok = False
     print(f"\n[driver] {'PASS' if ok else 'FAIL'}", flush=True)
     sys.exit(0 if ok else 1)

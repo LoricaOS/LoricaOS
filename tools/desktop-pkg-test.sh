@@ -22,6 +22,7 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 
 VERSION="$(cat VERSION 2>/dev/null || echo 0.0.0)"
+HERALD_KEY="${HERALD_KEY:-tools/herald-keys/herald.key}"   # must match herald's embedded anchor
 B=build
 KERNEL=$B/aegis-stripped.elf
 LIMINE_DIR=tools/limine
@@ -94,6 +95,24 @@ debugfs -w -R "write $HPKG.sig /root/desktop.hpkg.sig" "$INST" >/dev/null 2>&1 \
 # Confirm the bake (debugfs stat exits 0 even when absent — grep for "Inode:").
 debugfs -R "stat /root/desktop.hpkg" "$INST" 2>/dev/null | grep -q "Inode:" \
     || fail "baked .hpkg not present in rootfs after write"
+
+# A tiny local app package to exercise dependency warnings on a LOCAL install:
+# it depends on 'desktop' (installed by the herald run above) + 'lumen-nonexistent'
+# (never installed), so herald must warn about ONLY the missing one.
+DEPHPKG=$B/deptest_1.0.0_x86_64.hpkg
+DEPSTAGE="$(mktemp -d)"
+mkdir -p "$DEPSTAGE/apps/deptest"
+printf 'dummy deptest payload\n' > "$DEPSTAGE/apps/deptest/deptest"
+printf 'name=Dep Test\nexec=deptest\n' > "$DEPSTAGE/apps/deptest/app.ini"
+printf 'id=deptest\nname=Dep Test\nversion=1.0.0\nexec=deptest\ndepends=desktop lumen-nonexistent\n' \
+    > "$DEPSTAGE/manifest"
+HERALD_KEY="$HERALD_KEY" bash tools/herald-pack.sh "$DEPSTAGE" "$DEPHPKG" >/dev/null \
+    || fail "could not build deptest package"
+rm -rf "$DEPSTAGE"
+debugfs -w -R "write $DEPHPKG /root/deptest.hpkg" "$INST" >/dev/null 2>&1 \
+    || fail "debugfs could not bake deptest.hpkg"
+debugfs -w -R "write $DEPHPKG.sig /root/deptest.hpkg.sig" "$INST" >/dev/null 2>&1 \
+    || fail "debugfs could not bake deptest.hpkg.sig"
 
 build_iso "$B/aegis-instpkg.iso" "$B/instpkg-isodir" server "$INST" "$ESP_SERVER"
 if python3 tools/desktop-pkg-driver.py "$B/aegis-instpkg.iso"; then

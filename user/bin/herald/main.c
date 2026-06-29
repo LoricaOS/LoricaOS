@@ -618,6 +618,37 @@ static int install_bytes(const unsigned char *buf, size_t len)
     return 0;
 }
 
+/* Warn about declared dependencies that are not installed. For a LOCAL .hpkg
+ * herald has no repository to pull from, so this is advisory: it tells the user
+ * which prerequisites they still need (e.g. a Lumen GUI app sideloaded onto a
+ * box that doesn't have the compositor yet). Only MISSING deps are listed — a
+ * prerequisite already recorded in the db is silent. A repo install
+ * (cmd_install_named/resolve) doesn't need this: it fetches deps automatically.
+ * Returns the number of unmet dependencies. */
+static int warn_unmet_depends(const herald_manifest_t *m)
+{
+    char deps[256], *save = NULL, *tok;
+    herald_db_entry_t de;
+    int n = 0;
+
+    if (!m->depends[0])
+        return 0;
+    strncpy(deps, m->depends, sizeof(deps) - 1);
+    deps[sizeof(deps) - 1] = '\0';
+    for (tok = strtok_r(deps, " ", &save); tok; tok = strtok_r(NULL, " ", &save)) {
+        if (db_find(tok, &de) == 1)
+            continue;                 /* already installed — prerequisite met */
+        if (n++ == 0)
+            fprintf(stderr, "herald: warning: '%s' needs prerequisite(s) you do "
+                            "not have installed:\n", m->id);
+        fprintf(stderr, "          %s  —  install it with: herald install %s\n",
+                tok, tok);
+    }
+    if (n)
+        fprintf(stderr, "herald: '%s' will not work until then.\n", m->id);
+    return n;
+}
+
 /* Install a local .hpkg file: verify its detached signature, then install. */
 static int cmd_install(const char *path)
 {
@@ -630,6 +661,10 @@ static int cmd_install(const char *path)
         return 1;
     }
     r = install_bytes(buf, len);
+    /* On success, flag any prerequisites the user still needs (only the ones
+     * not already installed). Advisory — a local install can't fetch them. */
+    if (r == 0)
+        warn_unmet_depends(&m);
     free(buf);
     return r ? 1 : 0;
 }
