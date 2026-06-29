@@ -1,1 +1,0 @@
-service AUTH FB SETUID NET_SOCKET

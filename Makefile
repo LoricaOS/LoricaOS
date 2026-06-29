@@ -143,69 +143,20 @@ user/lib/glyph/libglyph.a: $(wildcard user/lib/glyph/*.c user/lib/glyph/*.h) $(M
 user/lib/libauth/libauth.a: user/lib/libauth/auth.c user/lib/libauth/auth.h
 	$(MAKE) -C user/lib/libauth
 
-user/lib/citadel/libcitadel.a: $(wildcard user/lib/citadel/*.c user/lib/citadel/*.h) user/lib/glyph/libglyph.a $(MUSL_BUILT)
-	$(MAKE) -C user/lib/citadel
-
 user/lib/libinstall/libinstall.a: $(wildcard user/lib/libinstall/*.c user/lib/libinstall/*.h) $(MUSL_BUILT)
 	$(MAKE) -C user/lib/libinstall
 
-# Programs with extra library dependencies
-user/bin/lumen/lumen.elf: $(wildcard user/bin/lumen/*.c user/bin/lumen/*.h) user/lib/glyph/libglyph.a user/lib/citadel/libcitadel.a $(MUSL_BUILT)
-	$(MAKE) -C user/bin/lumen
-
-user/bin/bastion/bastion.elf: user/bin/bastion/main.c user/lib/glyph/libglyph.a user/lib/libauth/libauth.a user/lib/audio/libaudio.a $(MUSL_BUILT)
-	$(MAKE) -C user/bin/bastion
-
-user/lib/audio/libaudio.a: user/lib/audio/audio.c user/lib/audio/audio.h user/lib/audio/minimp3.h
-	$(MAKE) -C user/lib/audio
-
+# Programs with extra library dependencies. The graphical stack (lumen, bastion,
+# citadel-dock, applications, and the GUI apps) is no longer built here — it is
+# fetched as herald packages and assembled into the desktop rootfs (see
+# tools/fetch-components.sh + tools/assemble-desktop-rootfs.sh). Only the
+# installer + gui-installer remain in-tree; gui-installer is the live-only
+# graphical installer and the lone remaining consumer of libglyph.
 user/bin/installer/installer.elf: user/bin/installer/main.c user/lib/libinstall/libinstall.a $(MUSL_BUILT)
 	$(MAKE) -C user/bin/installer
 
 user/bin/gui-installer/gui-installer.elf: user/bin/gui-installer/main.c user/lib/glyph/libglyph.a user/lib/libinstall/libinstall.a $(MUSL_BUILT)
 	$(MAKE) -C user/bin/gui-installer
-
-user/bin/settings/settings.elf: user/bin/settings/main.c user/lib/glyph/libglyph.a $(MUSL_BUILT)
-	$(MAKE) -C user/bin/settings
-
-user/bin/terminal/terminal.elf: user/bin/terminal/main.c user/lib/glyph/libglyph.a $(MUSL_BUILT)
-	$(MAKE) -C user/bin/terminal
-
-user/bin/calculator/calculator.elf: user/bin/calculator/main.c user/lib/glyph/libglyph.a $(MUSL_BUILT)
-	$(MAKE) -C user/bin/calculator
-
-user/bin/editor/editor.elf: user/bin/editor/main.c user/lib/glyph/libglyph.a $(MUSL_BUILT)
-	$(MAKE) -C user/bin/editor
-
-user/bin/filemanager/filemanager.elf: user/bin/filemanager/main.c user/lib/glyph/libglyph.a $(MUSL_BUILT)
-	$(MAKE) -C user/bin/filemanager
-
-user/bin/run/run.elf: user/bin/run/main.c user/lib/glyph/libglyph.a $(MUSL_BUILT)
-	$(MAKE) -C user/bin/run
-
-user/bin/tunes/tunes.elf: user/bin/tunes/main.c user/lib/glyph/libglyph.a user/lib/audio/libaudio.a $(MUSL_BUILT)
-	$(MAKE) -C user/bin/tunes
-
-user/bin/calendar/calendar.elf: user/bin/calendar/main.c user/lib/glyph/libglyph.a $(MUSL_BUILT)
-	$(MAKE) -C user/bin/calendar
-
-user/bin/netman/netman.elf: user/bin/netman/main.c user/lib/glyph/libglyph.a $(MUSL_BUILT)
-	$(MAKE) -C user/bin/netman
-
-user/bin/applications/applications.elf: user/bin/applications/main.c user/lib/glyph/libglyph.a $(MUSL_BUILT)
-	$(MAKE) -C user/bin/applications
-
-user/bin/imageviewer/imageviewer.elf: user/bin/imageviewer/main.c user/lib/glyph/libglyph.a $(MUSL_BUILT)
-	$(MAKE) -C user/bin/imageviewer
-
-user/bin/sysmon/sysmon.elf: user/bin/sysmon/main.c user/lib/glyph/libglyph.a $(MUSL_BUILT)
-	$(MAKE) -C user/bin/sysmon
-
-user/bin/lumen-probe/lumen-probe.elf: user/bin/lumen-probe/main.c user/lib/glyph/libglyph.a $(MUSL_BUILT)
-	$(MAKE) -C user/bin/lumen-probe
-
-user/bin/citadel-dock/citadel-dock.elf: user/bin/citadel-dock/main.c user/lib/glyph/libglyph.a $(MUSL_BUILT)
-	$(MAKE) -C user/bin/citadel-dock
 
 # BearSSL + curl (external builds)
 build/bearssl-install/lib/libbearssl.a:
@@ -337,9 +288,11 @@ selftest-iso: $(BUILD)/aspisos-test.iso
 
 # Manifest + skeleton sources, per layer. A rootfs rebuilds when any binary it
 # packs OR any skeleton file (cap policies, vigil services, /etc) changes.
-MANIFEST_SRCS_BASE    := $(shell grep -v '^\#' rootfs.manifest         2>/dev/null | awk 'NF>=2 {print $$1}')
-MANIFEST_SRCS_DESKTOP := $(shell grep -v '^\#' rootfs.desktop.manifest 2>/dev/null | awk 'NF>=2 {print $$1}')
+MANIFEST_SRCS_BASE    := $(shell grep -v '^\#' rootfs.manifest 2>/dev/null | awk 'NF>=2 {print $$1}')
 SKELETON_FILES_BASE    := $(shell find rootfs         -type f 2>/dev/null)
+# rootfs-desktop/ now holds only the gui-installer bundle skeleton (app.ini +
+# caps.d); the rest of the graphical stack is fetched as packages. The desktop
+# rootfs is assembled, not built from a manifest, so there is no desktop manifest.
 SKELETON_FILES_DESKTOP := $(shell find rootfs-desktop -type f 2>/dev/null)
 
 # No kernel in the rootfs image: the installed system boots the kernel from the
@@ -356,7 +309,7 @@ $(BUILD)/desktop-overlay.db: tools/components.list tools/fetch-components.sh too
 	bash tools/fetch-components.sh
 	bash tools/make-desktop-meta.sh
 
-$(ROOTFS_DESKTOP): $(ROOTFS_SERVER) $(BUILD)/desktop-overlay.db user/bin/gui-installer/gui-installer.elf tools/assemble-desktop-rootfs.sh
+$(ROOTFS_DESKTOP): $(ROOTFS_SERVER) $(BUILD)/desktop-overlay.db user/bin/gui-installer/gui-installer.elf $(SKELETON_FILES_DESKTOP) tools/assemble-desktop-rootfs.sh
 	bash tools/assemble-desktop-rootfs.sh $@
 
 rootfs: $(ROOTFS_DESKTOP) $(ROOTFS_SERVER)
