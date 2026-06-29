@@ -1,4 +1,4 @@
-/* user/bin/installer/main.c — Aegis text-mode installer
+/* user/bin/installer/main.c — AspisOS text-mode installer
  *
  * Thin UI shell over libinstall.a.  Collects disk choice and
  * credentials from the user via stdin prompts, then hands off to
@@ -182,8 +182,8 @@ int main(void)
     cooked.c_lflag |= (unsigned)(ECHO | ICANON | ISIG);
     tcsetattr(0, TCSANOW, &cooked);
 
-    printf("\n=== Aegis Installer ===\n\n");
-    printf("This will install Aegis to your NVMe disk.\n");
+    printf("\n=== AspisOS Installer ===\n\n");
+    printf("This will install AspisOS to your NVMe disk.\n");
     printf("WARNING: All data on the disk will be destroyed!\n\n");
 
     /* Raw whole-disk access (listing AND writing disks via sys_blkdev_*)
@@ -232,7 +232,7 @@ int main(void)
                (unsigned long long)devs[i].block_count *
                    devs[i].block_size / (1024 * 1024),
                install_disk_has_aegis(devs[i].name)
-                   ? "  [existing Aegis install — will be erased]" : "");
+                   ? "  [existing AspisOS install — will be erased]" : "");
         eligible[neligible++] = i;
     }
     if (neligible == 0) {
@@ -306,6 +306,6 @@ int main(void)
     }
 
     printf("\n=== Installation complete! ===\n");
-    printf("Remove the ISO and reboot to start Aegis from disk.\n\n");
+    printf("Remove the ISO and reboot to start AspisOS from disk.\n\n");
     return 0;
 }

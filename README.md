@@ -15,7 +15,7 @@ Requires `musl-gcc`, `nasm`-free userland toolchain, `xorriso`, `mtools`,
 `dosfstools`, the vendored Limine in `tools/`, and `curl` (to fetch the kernel).
 
 ```
-make           # build/aegis.iso  (live, bootable)
+make           # build/aspisos-desktop.iso  (live, bootable)
 make test      # boot the ISO headless; expect "[BASTION] greeter ready"
 make version   # AspisOS <ver> (kernel <ver>)
 make clean

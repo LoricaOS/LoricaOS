@@ -6,7 +6,7 @@
 # stack all the way to the login greeter ("[BASTION] greeter ready"). That single
 # line exercises kernel + init-from-rootfs + services + Lumen + Bastion.
 set -u
-ISO="${1:?usage: ostest.sh <aegis.iso>}"
+ISO="${1:?usage: ostest.sh <aspisos-desktop.iso>}"
 LOG="$(mktemp)"
 MARKER="[BASTION] greeter ready"
 

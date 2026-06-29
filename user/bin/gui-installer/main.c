@@ -1,4 +1,4 @@
-/* user/bin/gui-installer/main.c — Glyph-based Aegis installer wizard
+/* user/bin/gui-installer/main.c — Glyph-based AspisOS installer wizard
  *
  * A graphical front-end for libinstall.a.  Maps the framebuffer
  * directly (same pattern as Bastion) and drives a five-screen
@@ -185,13 +185,13 @@ static void draw_button(int x, int y, int w, int h,
 
 static void draw_screen_welcome(void)
 {
-    draw_chrome("Aegis Installer");
+    draw_chrome("AspisOS Installer");
 
     int cx = g_st.fb_w / 2;
-    draw_text18(cx - 160, 120, "Welcome to Aegis", 0x00FFFFFF);
+    draw_text18(cx - 160, 120, "Welcome to AspisOS", 0x00FFFFFF);
 
     draw_text14(cx - 280, 180,
-                "This installer will install Aegis to your disk.",
+                "This installer will install AspisOS to your disk.",
                 0x00C0C0D0);
     draw_text14(cx - 280, 204,
                 "All data on the target disk will be erased.",
@@ -289,7 +289,7 @@ static void draw_screen_disk(void)
                      g_st.disks[i].name,
                      (unsigned long long)g_st.disks[i].block_count *
                          g_st.disks[i].block_size / (1024 * 1024),
-                     has_install ? "  [existing Aegis install]" : "");
+                     has_install ? "  [existing AspisOS install]" : "");
             uint32_t color = has_install ? 0x00FFAA40 : 0x00FFFFFF;
             draw_text14(lx + 12, ry + 8, line, color);
         }
@@ -443,7 +443,7 @@ static void draw_screen_confirm(void)
                 0x00FFFFFF);
     y += 60;
 
-    /* If the selected disk already has an Aegis install, make the
+    /* If the selected disk already has an AspisOS install, make the
      * destruction explicit. The user has reported losing systems by
      * accidentally re-installing without noticing. */
     int sel = g_st.selected_disk;
@@ -451,7 +451,7 @@ static void draw_screen_confirm(void)
                    install_disk_has_aegis(g_st.disks[sel].name);
     if (existing) {
         draw_text14(lx, y,
-                    "WARNING: this disk already contains an Aegis install.",
+                    "WARNING: this disk already contains an AspisOS install.",
                     0x00FF6060);
         y += 22;
         draw_text14(lx, y,
@@ -856,7 +856,7 @@ main(int argc, char **argv)
         dprintf(2, "gui-installer: lumen_connect failed (%d)\n", g_st.lfd);
         return 1;
     }
-    g_st.lwin = lumen_window_create(g_st.lfd, "Install Aegis", 800, 600);
+    g_st.lwin = lumen_window_create(g_st.lfd, "Install AspisOS", 800, 600);
     if (!g_st.lwin) {
         dprintf(2, "gui-installer: lumen_window_create failed\n");
         return 1;

@@ -262,14 +262,14 @@ define LIMINE_ISO_RULE
 endef
 
 # ── The two production ISOs ─────────────────────────────────────────────────
-$(BUILD)/aegis-desktop.iso: $(KERNEL_STRIPPED) $(ROOTFS_DESKTOP) $(ESP_DESKTOP) $(LIMINE_BIN) tools/gen-limine-conf.sh
+$(BUILD)/aspisos-desktop.iso: $(KERNEL_STRIPPED) $(ROOTFS_DESKTOP) $(ESP_DESKTOP) $(LIMINE_BIN) tools/gen-limine-conf.sh
 	$(call LIMINE_ISO_RULE,$@,$(BUILD)/desktop-isodir,live,$(ROOTFS_DESKTOP),$(ESP_DESKTOP))
 
-$(BUILD)/aegis-server.iso: $(KERNEL_STRIPPED) $(ROOTFS_SERVER) $(ESP_SERVER) $(LIMINE_BIN) tools/gen-limine-conf.sh
+$(BUILD)/aspisos-server.iso: $(KERNEL_STRIPPED) $(ROOTFS_SERVER) $(ESP_SERVER) $(LIMINE_BIN) tools/gen-limine-conf.sh
 	$(call LIMINE_ISO_RULE,$@,$(BUILD)/server-isodir,server,$(ROOTFS_SERVER),$(ESP_SERVER))
 
-desktop-iso: $(BUILD)/aegis-desktop.iso
-server-iso:  $(BUILD)/aegis-server.iso
+desktop-iso: $(BUILD)/aspisos-desktop.iso
+server-iso:  $(BUILD)/aspisos-server.iso
 iso: desktop-iso server-iso
 
 # Self-test ISO: the desktop image (carries captest), kernel cmdline `selftest`
@@ -316,15 +316,15 @@ rootfs: $(ROOTFS_DESKTOP) $(ROOTFS_SERVER)
 #     binaries present.
 # (3) selftest ISO -> "[CAPTEST] ALL PASS" (userland capability model).
 test: desktop-iso server-iso $(BUILD)/aspisos-test.iso
-	bash tools/ostest.sh $(BUILD)/aegis-desktop.iso
-	bash tools/servertest.sh $(BUILD)/aegis-server.iso
+	bash tools/ostest.sh $(BUILD)/aspisos-desktop.iso
+	bash tools/servertest.sh $(BUILD)/aspisos-server.iso
 	bash tools/selftest.sh $(BUILD)/aspisos-test.iso
 
 version:
 	@echo "AspisOS $(AEGIS_OS_VERSION) (kernel $(KERNEL_VERSION))"
 
 clean:
-	rm -rf $(BUILD)/aegis-desktop.iso $(BUILD)/aegis-server.iso $(BUILD)/aspisos-test.iso \
+	rm -rf $(BUILD)/aspisos-desktop.iso $(BUILD)/aspisos-server.iso $(BUILD)/aspisos-test.iso \
 	       $(BUILD)/desktop-isodir $(BUILD)/server-isodir $(BUILD)/selftest-isodir \
 	       $(BUILD)/rootfs-desktop.img $(BUILD)/rootfs-server.img \
 	       $(BUILD)/esp-desktop.img $(BUILD)/esp-server.img \

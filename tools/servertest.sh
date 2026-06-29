@@ -7,7 +7,7 @@
 # never appear on serial (they aren't in the server image at all), so the build
 # really is graphical-free.
 set -u
-ISO="${1:?usage: servertest.sh <aegis-server.iso>}"
+ISO="${1:?usage: servertest.sh <aspisos-server.iso>}"
 LOG="$(mktemp)"
 
 timeout 120 qemu-system-x86_64 -machine pc -cdrom "$ISO" -boot order=d \
