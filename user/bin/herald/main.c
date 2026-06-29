@@ -369,6 +369,54 @@ static int install_bytes(const unsigned char *buf, size_t len)
         return -1;
     }
 
+    /* System package (class=system): a first-party, signature-trusted package
+     * (the desktop stack). Its signature is already verified — load_verified_pkg
+     * for a local .hpkg, or the repo's Release-sig → Packages-hash → pkg-hash
+     * chain for a repo install — and only the first-party key signs packages, so
+     * the signature IS the authorization. It therefore installs its whole payload
+     * tree verbatim to / (bin/, apps/, etc/aegis/caps.d/, etc/vigil/, usr/share/…),
+     * skipping the third-party app constraints: no caps allow-list, no exec==id,
+     * no per-prefix gate. Two lines of defense remain and are NOT bypassed:
+     * tar_extract still rejects absolute paths and ".." (path_is_safe), and the
+     * kernel still gates writes to the protected trees (/bin /sbin /apps
+     * /etc/aegis) on herald's CAP_KIND_INSTALL — so this fails without an
+     * authenticated admin session, exactly like an app install. The shipped
+     * caps.d files take effect on the commit below; no anchor_register is needed
+     * because the stack grants caps only under the builtin anchors /bin + /apps. */
+    if (m.is_system) {
+        err = NULL;
+        if (tar_extract_mem(buf, len, "/", NULL, &err) != 0) {
+            if (errno == EPERM || errno == EACCES)
+                fprintf(stderr, "herald: install denied — installing a system "
+                                "package requires an authenticated admin "
+                                "session\n");
+            else
+                fprintf(stderr, "herald: install failed: %s\n",
+                        err ? err : "extraction error");
+            return -1;
+        }
+
+        herald_sha256(buf, len, dg);
+        hex32(dg, hex);
+        memset(&e, 0, sizeof(e));
+        strncpy(e.id, m.id, sizeof(e.id) - 1);
+        strncpy(e.version, m.version, sizeof(e.version) - 1);
+        strncpy(e.exec, m.exec, sizeof(e.exec) - 1);   /* "" for system pkgs */
+        strncpy(e.sha256, hex, sizeof(e.sha256) - 1);
+        if (db_put(&e) != 0)
+            fprintf(stderr, "herald: warning: installed but failed to record "
+                            "in database\n");
+
+        if (syscall(SYS_INSTALL_COMMIT) != 0)
+            fprintf(stderr, "herald: warning: kernel policy reload failed — new "
+                            "caps take effect on next boot\n");
+        else
+            printf("kernel cap policy + anchors reloaded\n");
+
+        printf("installed system package %s %s\n", m.id, m.version);
+        return 0;
+    }
+
     /* Capability escalation guard — checked before anything is written. */
     if (m.caps[0] && !caps_are_safe(m.caps, badcap, sizeof(badcap))) {
         fprintf(stderr, "herald: refusing %s: package requests disallowed "

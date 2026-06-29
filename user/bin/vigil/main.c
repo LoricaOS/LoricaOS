@@ -267,6 +267,15 @@ main(void)
             memcpy(s_boot_mode, "graphical", 10);
         else if (strstr(cmdline, "boot=text"))
             memcpy(s_boot_mode, "text", 5);
+        else if (access("/bin/bastion", X_OK) == 0)
+            /* No explicit boot= on the cmdline: infer the mode from whether the
+             * graphical stack is installed. The presence of the compositor's
+             * display manager means "this is a desktop" — so a server that runs
+             * `herald install desktop` (which lands /bin/bastion) comes up to the
+             * greeter on its next boot with no bootloader edit, while a bare
+             * server (no bastion) stays text. An explicit boot= above always
+             * wins, so `boot=text` debug entries still force a text console. */
+            memcpy(s_boot_mode, "graphical", 10);
         /* else keep default "text" */
         if (strstr(cmdline, "quiet"))
             s_quiet = 1;

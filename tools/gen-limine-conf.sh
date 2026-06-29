@@ -57,7 +57,7 @@ case "$mode" in
         TIMEOUT=3
         LIVE_ARG=""
         ;;
-    test|installer-test|dltest|perfbench|selftest)
+    test|installer-test|dltest|perfbench|selftest|infer)
         WITH_MODULES=1
         TIMEOUT=0
         LIVE_ARG=" aegis_live=1"
@@ -107,7 +107,24 @@ case "$mode" in
     selftest)
         emit_entry "AspisOS (selftest)" "boot=text quiet selftest$LIVE_ARG"
         ;;
-    server|server-installed)
+    infer)
+        # No explicit boot= — exercises vigil's mode inference (graphical iff
+        # the compositor is installed). Used by the desktop-package test to
+        # prove a box with the graphical stack present comes up to the greeter
+        # exactly as it would on the reboot after `herald install desktop`.
+        emit_entry "AspisOS (infer)" "quiet$LIVE_ARG"
+        ;;
+    server)
+        # Live server ISO: explicit text console — this is the installer
+        # environment and has no compositor to boot into.
         emit_entry "AspisOS Server" "boot=text quiet$LIVE_ARG"
+        ;;
+    server-installed)
+        # Installed server: deliberately NO explicit boot= mode. vigil then
+        # infers the mode from whether the graphical stack is present — a bare
+        # server has no compositor and comes up to a text login, but after
+        # `herald install desktop` lands /bin/bastion the next boot brings up
+        # the greeter, with no bootloader edit. (LIVE_ARG is empty here.)
+        emit_entry "AspisOS Server" "quiet$LIVE_ARG"
         ;;
 esac

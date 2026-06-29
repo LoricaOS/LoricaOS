@@ -126,12 +126,21 @@ manifest_parse(const void *buf, size_t len, herald_manifest_t *out)
             bounded_copy(out->depends, sizeof(out->depends), val, strlen(val));
         } else if (strcmp(key, "paths") == 0) {
             bounded_copy(out->paths, sizeof(out->paths), val, strlen(val));
+        } else if (strcmp(key, "class") == 0) {
+            /* class=system marks a first-party, signature-trusted system
+             * package (see manifest.h). Any other value (incl. the implicit
+             * default) is an ordinary third-party app. */
+            out->is_system = (strcmp(val, "system") == 0);
         }
         /* Unknown keys: ignore. */
     }
 
-    /* All four required fields must be present and non-empty. */
-    if (!out->id[0] || !out->name[0] || !out->version[0] || !out->exec[0])
+    /* id/name/version are always required. exec is required only for app
+     * packages — a system package installs a tree, not a single launcher, so
+     * it has no meaningful exec. */
+    if (!out->id[0] || !out->name[0] || !out->version[0])
+        return -1;
+    if (!out->is_system && !out->exec[0])
         return -1;
 
     return 0;

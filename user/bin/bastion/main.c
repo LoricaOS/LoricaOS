@@ -630,8 +630,19 @@ main(int argc, char **argv)
                 close(cfd);
                 if (cn > 0) {
                     cmd[cn] = '\0';
-                    if (strstr(cmd, "boot=graphical"))
+                    if (strstr(cmd, "boot=graphical")) {
                         graphical = 1;
+                    } else if (!strstr(cmd, "boot=text")) {
+                        /* No explicit boot= mode on the cmdline: vigil only
+                         * starts bastion (a graphical-mode service) once it has
+                         * inferred graphical mode from the compositor being
+                         * installed, so mirror that inference here and come up.
+                         * An explicit boot=text still forces an exit. This is
+                         * what lets a server that ran `herald install desktop`
+                         * reach the greeter on the next boot with no bootloader
+                         * edit. (See vigil's matching /bin/bastion check.) */
+                        graphical = 1;
+                    }
                     /* The bottom-left input-diagnostics line is a triage aid
                      * (serial-less "is the keyboard alive?" debugging). It's
                      * off in production greeters and only rendered when the

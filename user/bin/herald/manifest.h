@@ -17,7 +17,17 @@ typedef struct {
     char id[64];        /* bundle dir under /apps; required */
     char name[64];      /* display name; required */
     char version[32];   /* required */
-    char exec[64];      /* ELF basename inside apps/<id>/; required */
+    char exec[64];      /* ELF basename inside apps/<id>/; required UNLESS system */
+    int  is_system;     /* class=system: a first-party, signature-trusted system
+                         * package (the desktop stack). Installs its whole payload
+                         * tree verbatim to / (bin/, apps/, etc/aegis/caps.d/,
+                         * etc/vigil/, usr/share/...), bypassing the third-party
+                         * app constraints (caps allow-list, exec==id, single
+                         * bundle dir). Trust is the package signature: only the
+                         * first-party key signs the repo, so a class=system
+                         * package is exactly as trusted as the rootfs that
+                         * shipped herald. Third-party (class=app) packages are
+                         * unaffected — they stay fully constrained. */
     char caps[256];     /* raw value: space-separated cap names; "" if none */
     char depends[256];  /* raw value: space-separated ids; "" if none */
     char paths[256];    /* raw value: space-separated extra install prefixes
