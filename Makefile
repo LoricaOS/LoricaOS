@@ -223,6 +223,17 @@ user/bin/rune:
 # ── Limine bootloader: host tool + installer ESP image ──────────────────
 LIMINE_DIR = tools/limine
 LIMINE_BIN = $(BUILD)/limine
+
+# Limine binaries are fetched (pinned in $(LIMINE_DIR)/VERSION), not vendored.
+# The stamp runs the fetch once; every limine file depends on it, so the ESP +
+# ISO rules pull it in transitively (they already list limine files as prereqs).
+LIMINE_STAMP = $(LIMINE_DIR)/.fetched
+$(LIMINE_STAMP): tools/fetch-limine.sh $(LIMINE_DIR)/VERSION
+	sh tools/fetch-limine.sh
+	@touch $@
+$(LIMINE_DIR)/limine.c $(LIMINE_DIR)/limine-bios-hdd.h $(LIMINE_DIR)/limine-bios.sys \
+$(LIMINE_DIR)/limine-bios-cd.bin $(LIMINE_DIR)/limine-uefi-cd.bin \
+$(LIMINE_DIR)/BOOTX64.EFI $(LIMINE_DIR)/BOOTIA32.EFI: $(LIMINE_STAMP)
 ESP_DESKTOP = $(BUILD)/esp-desktop.img
 ESP_SERVER  = $(BUILD)/esp-server.img
 HOSTCC    ?= cc

@@ -4,4 +4,7 @@
 *.o
 *.a
 *.elf
-!tools/limine/*.EFI
+
+# Limine is fetched (pinned in tools/limine/VERSION), not vendored.
+/tools/limine/*
+!/tools/limine/VERSION
