@@ -45,7 +45,7 @@ case "$mode" in
         TIMEOUT=3
         LIVE_ARG=" aegis_live=1"
         ;;
-    test|installer-test|dltest|perfbench)
+    test|installer-test|dltest|perfbench|selftest)
         WITH_MODULES=1
         TIMEOUT=0
         LIVE_ARG=" aegis_live=1"
@@ -91,5 +91,8 @@ case "$mode" in
         ;;
     perfbench)
         emit_entry "Aegis (perfbench)" "boot=text quiet perfbench_ipc perfbench_fs$LIVE_ARG"
+        ;;
+    selftest)
+        emit_entry "AspisOS (selftest)" "boot=text quiet selftest$LIVE_ARG"
         ;;
 esac
