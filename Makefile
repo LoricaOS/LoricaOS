@@ -20,7 +20,7 @@ ISO_DIR = $(BUILD)/isodir
 CXX_AEGIS       = /opt/aegis-cxx/bin/x86_64-buildroot-linux-musl-g++
 CXX_FLAGS_AEGIS = -static -O2 -std=c++23 -fno-pie -no-pie
 
-.PHONY: all iso rootfs build-musl test clean version curl_bin
+.PHONY: all iso selftest-iso rootfs build-musl test clean version curl_bin
 all: iso
 
 # ── Kernel artifact: fetched, not built ─────────────────────────────────────
@@ -50,7 +50,7 @@ SIMPLE_USER_PROGS = \
     tr cut expand realpath stat yes find which uniq \
     ps kill free uptime du pgrep pkill xargs more diff dmesg df ip \
     smpstress futexstress mmfaultstress elffuzz sysfuzz fduaf blkuaf extabtest vforkstress dltest captest cowtest \
-    perfbench-ipc forkbench
+    perfbench-ipc forkbench selftest
 
 # Generate rules: user/bin/foo/foo.elf depends on musl AND its own sources,
 # so editing any .c/.h under user/bin/foo triggers a rebuild.  Without the
@@ -295,6 +295,13 @@ $(BUILD)/aegis.iso: $(KERNEL_STRIPPED) $(ROOTFS) $(ESP_IMG) $(LIMINE_BIN) tools/
 	$(call LIMINE_ISO_RULE,$@,$(ISO_DIR),live)
 
 iso: $(BUILD)/aegis.iso
+
+# Self-test ISO: same image, kernel cmdline carries `selftest` so vigil runs the
+# userland security probe (/bin/selftest -> /bin/captest) at boot.
+$(BUILD)/aspisos-test.iso: $(KERNEL_STRIPPED) $(ROOTFS) $(ESP_IMG) $(LIMINE_BIN) tools/gen-limine-conf.sh
+	$(call LIMINE_ISO_RULE,$@,$(BUILD)/selftest-isodir,selftest)
+selftest-iso: $(BUILD)/aspisos-test.iso
+
 MANIFEST_SRCS := $(shell grep -v '^\#' rootfs.manifest 2>/dev/null | awk 'NF>=2 {print $$1}')
 # Also depend on every file under the rootfs/ skeleton tree (cap policies,
 # vigil services, etc.) so editing /etc files actually triggers a rebuild.
@@ -309,10 +316,14 @@ $(ROOTFS): $(MANIFEST_SRCS) $(SKELETON_FILES) $(BUILD)/logo.raw $(BUILD)/claude.
 
 rootfs: $(ROOTFS)
 
-# ── OS boot test: boot the live ISO headless; success = the GUI greeter comes
-# up ("[BASTION] greeter ready"), proving kernel + userland + display stack. ──
-test: iso
+# ── Tests ───────────────────────────────────────────────────────────────────
+# (1) boot the live ISO → GUI greeter ("[BASTION] greeter ready") = kernel +
+#     userland + display stack all up.
+# (2) boot the selftest ISO → "[CAPTEST] ALL PASS" = userland capability model
+#     enforced (every privileged op denied to a baseline process).
+test: iso $(BUILD)/aspisos-test.iso
 	bash tools/ostest.sh $(BUILD)/aegis.iso
+	bash tools/selftest.sh $(BUILD)/aspisos-test.iso
 
 version:
 	@echo "AspisOS $(AEGIS_OS_VERSION) (kernel $(KERNEL_VERSION))"
