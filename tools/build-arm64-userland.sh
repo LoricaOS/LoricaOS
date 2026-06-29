@@ -1,0 +1,288 @@
+#!/bin/bash
+# build-arm64-userland.sh — Build aarch64-musl user binaries for ARM64 kernel blobs.
+#
+# Phase A4 of the ARM64 port. Produces static ELF binaries at
+#   $REPO/build/blobs-arm64/<name>.bin
+# for each boot-critical user program. The kernel/arch/arm64/Makefile
+# consumes these files via `objcopy -O elf64-littleaarch64 -I binary` to
+# produce _binary_<name>_bin_{start,end} symbols identical to the x86 path.
+#
+# Toolchain approach
+# ------------------
+# musl.cc hosts only Linux x86_64-hosted aarch64 cross toolchains; there
+# is no prebuilt tarball for macOS or linux-arm64 hosts. To stay portable
+# and avoid Docker/crosstool-NG dependencies, we build musl-1.2.5 in-tree
+# against the already-installed `aarch64-elf-gcc` bare-metal cross
+# compiler (Homebrew on macOS; distro package on Linux). The resulting
+# libc.a + CRT objects + headers form a usable sysroot for static musl
+# programs. A small wrapper at build/musl-arm64/bin/aarch64-musl-gcc
+# invokes aarch64-elf-gcc with the right -isystem / crt chain.
+#
+# Required tools on PATH:
+#   aarch64-elf-gcc           (Homebrew: aarch64-elf-gcc; Debian: gcc-aarch64-linux-gnu OK too)
+#   aarch64-elf-ar
+#   aarch64-elf-ranlib
+#   aarch64-elf-objcopy
+#
+# Usage:
+#   bash tools/build-arm64-userland.sh           # build all blobs
+#   bash tools/build-arm64-userland.sh vigil     # build a specific blob
+#
+# Outputs:
+#   build/musl-arm64/usr/{include,lib}/…          (sysroot)
+#   build/musl-arm64/bin/aarch64-musl-gcc         (compiler wrapper)
+#   build/blobs-arm64/<name>.bin                  (stripped static ELF)
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
+MUSL_VER="1.2.5"
+MUSL_SRC="$REPO/references/musl-$MUSL_VER"
+MUSL_TAR="$REPO/references/musl-$MUSL_VER.tar.gz"
+SYSROOT="$REPO/build/musl-arm64"
+SYSROOT_USR="$SYSROOT/usr"
+CC_WRAPPER="$SYSROOT/bin/aarch64-musl-gcc"
+BLOB_OUT="$REPO/build/blobs-arm64"
+
+# Cross toolchain programs (must be on PATH)
+CROSS_CC="aarch64-elf-gcc"
+CROSS_AR="aarch64-elf-ar"
+CROSS_RANLIB="aarch64-elf-ranlib"
+CROSS_STRIP="aarch64-elf-strip"
+
+log() { echo "[build-arm64-userland] $*"; }
+
+check_toolchain() {
+    for bin in "$CROSS_CC" "$CROSS_AR" "$CROSS_RANLIB" "$CROSS_STRIP"; do
+        if ! command -v "$bin" >/dev/null 2>&1; then
+            echo "error: $bin not on PATH" >&2
+            echo "Install aarch64-elf-gcc (Homebrew: \`brew install aarch64-elf-gcc\`," >&2
+            echo "Debian/Ubuntu: \`apt install gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu\`" >&2
+            echo "— if using Linux gnu-ld, adjust CROSS_* vars in this script)." >&2
+            exit 1
+        fi
+    done
+}
+
+build_musl_sysroot() {
+    # Skip if already built for aarch64.
+    if [ -f "$SYSROOT_USR/lib/libc.a" ] \
+       && [ -f "$SYSROOT_USR/lib/crt1.o" ] \
+       && [ -f "$SYSROOT_USR/include/stdio.h" ] \
+       && [ -x "$CC_WRAPPER" ]; then
+        log "musl sysroot already present at $SYSROOT_USR — skipping build"
+        return 0
+    fi
+
+    log "building aarch64 musl sysroot at $SYSROOT_USR"
+
+    if [ ! -d "$MUSL_SRC" ]; then
+        if [ ! -f "$MUSL_TAR" ]; then
+            log "downloading musl $MUSL_VER"
+            mkdir -p "$REPO/references"
+            curl -L -o "$MUSL_TAR" "https://musl.libc.org/releases/musl-$MUSL_VER.tar.gz"
+        fi
+        log "extracting musl $MUSL_VER"
+        tar -xzf "$MUSL_TAR" -C "$REPO/references/"
+    fi
+
+    local build_dir="$REPO/build/musl-arm64-obj"
+    rm -rf "$build_dir"
+    mkdir -p "$build_dir"
+    cd "$build_dir"
+
+    log "configuring musl for aarch64 (CC=$CROSS_CC)"
+    "$MUSL_SRC/configure" \
+        --target=aarch64-linux-musl \
+        --prefix=/usr \
+        --disable-shared \
+        --enable-static \
+        CC="$CROSS_CC" \
+        CFLAGS="-O2 -ffreestanding -nostdinc"
+
+    log "building musl (this takes ~2 minutes)"
+    make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)" \
+        AR="$CROSS_AR" RANLIB="$CROSS_RANLIB" \
+        > "$build_dir/build.log" 2>&1 || {
+            echo "musl build failed — tail of $build_dir/build.log:" >&2
+            tail -40 "$build_dir/build.log" >&2
+            exit 1
+        }
+
+    log "installing musl sysroot to $SYSROOT_USR"
+    rm -rf "$SYSROOT_USR"
+    make install DESTDIR="$SYSROOT" \
+        AR="$CROSS_AR" RANLIB="$CROSS_RANLIB" \
+        >> "$build_dir/build.log" 2>&1
+
+    # Write the compiler wrapper. We use aarch64-elf-gcc (bare-metal) +
+    # musl sysroot to produce a Linux-ABI static binary. The incantation
+    # mirrors x86 musl-gcc: strip all default search paths, explicitly
+    # link crt1.o/crti.o/libc.a/libgcc/crtn.o in the right order.
+    mkdir -p "$(dirname "$CC_WRAPPER")"
+    local libgcc
+    libgcc="$("$CROSS_CC" -print-libgcc-file-name)"
+    cat > "$CC_WRAPPER" << WEOF
+#!/bin/bash
+# aarch64-musl-gcc — wrapper over $CROSS_CC + musl sysroot at $SYSROOT_USR.
+# Generated by tools/build-arm64-userland.sh.
+
+SYSROOT="$SYSROOT_USR"
+LIBGCC="$libgcc"
+CROSS_CC="$CROSS_CC"
+
+# Separate output / compile-only flags from everything else.
+out_flag=""
+compile_only=0
+static=0
+user_args=()
+while [ \$# -gt 0 ]; do
+    case "\$1" in
+        -c)      compile_only=1; user_args+=("\$1"); shift ;;
+        -o)      out_flag="\$2"; shift 2 ;;
+        -static) static=1; user_args+=("\$1"); shift ;;
+        *)       user_args+=("\$1"); shift ;;
+    esac
+done
+
+base_flags=(
+    -nostdinc -nostdlib
+    -isystem "\$SYSROOT/include"
+    -fno-stack-protector
+    -fno-pie
+    -static
+)
+
+if [ \$compile_only -eq 1 ]; then
+    cmd=("\$CROSS_CC" "\${base_flags[@]}" "\${user_args[@]}")
+    if [ -n "\$out_flag" ]; then cmd+=(-o "\$out_flag"); fi
+    exec "\${cmd[@]}"
+fi
+
+# Link step.
+cmd=(
+    "\$CROSS_CC"
+    "\${base_flags[@]}"
+    -Wl,--build-id=none
+    "\$SYSROOT/lib/crt1.o" "\$SYSROOT/lib/crti.o"
+    "\${user_args[@]}"
+    "\$SYSROOT/lib/libc.a"
+    "\$LIBGCC"
+    "\$SYSROOT/lib/crtn.o"
+)
+if [ -n "\$out_flag" ]; then cmd+=(-o "\$out_flag"); fi
+exec "\${cmd[@]}"
+WEOF
+    chmod +x "$CC_WRAPPER"
+
+    log "musl sysroot ready: $(file "$SYSROOT_USR/lib/libc.a" 2>/dev/null | head -1)"
+}
+
+# ── Per-binary builders ──────────────────────────────────────────────────
+
+# Simple single-file musl programs: user/bin/<name>/main.c → blob
+build_simple() {
+    local name="$1"
+    local src="$REPO/user/bin/$name/main.c"
+    if [ ! -f "$src" ]; then
+        log "SKIP $name: $src does not exist"
+        return 0
+    fi
+    local out="$BLOB_OUT/$name.bin"
+    log "building $name ($src → $out)"
+    mkdir -p "$BLOB_OUT"
+    "$CC_WRAPPER" -O2 -Wall -o "$out" "$src"
+    "$CROSS_STRIP" -s "$out"
+}
+
+# libauth static library — built into build/musl-arm64/lib/libauth.a so
+# that login can link against it. libauth itself only needs musl.
+build_libauth() {
+    local lib_src="$REPO/user/lib/libauth/auth.c"
+    local lib_hdr="$REPO/user/lib/libauth/auth.h"
+    local out_dir="$SYSROOT_USR/lib"
+    local out_lib="$out_dir/libauth.a"
+    if [ -f "$out_lib" ] && [ "$out_lib" -nt "$lib_src" ]; then
+        return 0
+    fi
+    log "building libauth.a"
+    local tmp_obj="$REPO/build/musl-arm64-obj/auth.o"
+    mkdir -p "$(dirname "$tmp_obj")"
+    "$CC_WRAPPER" -c -O2 -I"$(dirname "$lib_hdr")" -o "$tmp_obj" "$lib_src"
+    "$CROSS_AR" rcs "$out_lib" "$tmp_obj"
+    # also copy header so -I$(sysroot)/usr/include/libauth works if we ever need it
+    mkdir -p "$SYSROOT_USR/include"
+    cp "$lib_hdr" "$SYSROOT_USR/include/auth.h"
+}
+
+build_login() {
+    local src="$REPO/user/bin/login/main.c"
+    local out="$BLOB_OUT/login.bin"
+    log "building login ($src → $out)"
+    build_libauth
+    mkdir -p "$BLOB_OUT"
+    # libauth.a is parked in $SYSROOT_USR/lib/libauth.a — pass the
+    # archive path directly rather than relying on -L/-l search paths,
+    # which the bare-metal cross ld doesn't find without --sysroot.
+    "$CC_WRAPPER" -O2 -Wall -I"$SYSROOT_USR/include" \
+        -o "$out" "$src" "$SYSROOT_USR/lib/libauth.a"
+    "$CROSS_STRIP" -s "$out"
+}
+
+# stsh is a multi-file shell in user/bin/stsh/*.c.
+build_stsh() {
+    local srcdir="$REPO/user/bin/stsh"
+    local out="$BLOB_OUT/shell.bin"
+    log "building stsh (→ $out as blob name 'shell')"
+    mkdir -p "$BLOB_OUT"
+    local srcs=()
+    for f in main.c editor.c history.c complete.c parser.c exec.c caps.c env.c; do
+        srcs+=("$srcdir/$f")
+    done
+    "$CC_WRAPPER" -O2 -Wall -I"$srcdir" -o "$out" "${srcs[@]}"
+    "$CROSS_STRIP" -s "$out"
+}
+
+# vigil: initrd/vfs-heavy init process.
+build_vigil() {
+    local src="$REPO/user/bin/vigil/main.c"
+    local out="$BLOB_OUT/vigil.bin"
+    log "building vigil ($src → $out)"
+    mkdir -p "$BLOB_OUT"
+    "$CC_WRAPPER" -O2 -Wall -o "$out" "$src"
+    "$CROSS_STRIP" -s "$out"
+    # The kernel also looks for an "init" blob which resolves to vigil.
+    cp "$out" "$BLOB_OUT/init.bin"
+}
+
+# ── dispatch ─────────────────────────────────────────────────────────────
+
+want="${1:-all}"
+check_toolchain
+build_musl_sysroot
+mkdir -p "$BLOB_OUT"
+
+case "$want" in
+    all)
+        build_vigil
+        build_stsh
+        build_login
+        build_simple echo
+        build_simple cat
+        build_simple ls
+        ;;
+    vigil)  build_vigil ;;
+    init)   build_vigil ;;     # init blob = vigil
+    shell)  build_stsh ;;
+    login)  build_login ;;
+    echo|cat|ls)
+        build_simple "$want" ;;
+    *)
+        echo "unknown blob: $want" >&2
+        exit 1
+        ;;
+esac
+
+log "done. blobs in $BLOB_OUT:"
+ls -l "$BLOB_OUT"

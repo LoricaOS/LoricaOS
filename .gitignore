@@ -1,0 +1,7 @@
+/build/
+/vendor/
+/references/
+*.o
+*.a
+*.elf
+!tools/limine/*.EFI

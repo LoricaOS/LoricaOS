@@ -1,0 +1,6 @@
+# captest security-regression probe — declares an ADMIN-tier DISK_ADMIN that
+# must be WITHHELD without an admin_session (security review 05 finding 1).
+# DO NOT add other caps: the baseline-deny suite relies on captest holding
+# nothing else. (Keep this file < 512 bytes: the loader reads only the first
+# block, so the directive below must stay near the top.)
+admin DISK_ADMIN

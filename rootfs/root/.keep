@@ -1,0 +1,5 @@
+This file exists so the rootfs builder creates /root (the root user's
+home directory, referenced as HOME=/root throughout the system). Without
+a tracked file here, git would not preserve the empty directory and the
+ext2 image would ship without /root — breaking anything that writes to
+$HOME (e.g. the text editor's default /root/untitled.txt).

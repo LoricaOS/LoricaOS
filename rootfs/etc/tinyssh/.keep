@@ -1,0 +1,1 @@
+# tinysshd host keys are generated into sshkeydir/ at first boot by /bin/sshd.

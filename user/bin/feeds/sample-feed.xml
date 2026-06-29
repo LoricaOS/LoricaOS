@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Aegis News</title>
+    <link>https://github.com/exec/aegis</link>
+    <description>Dispatches from the Aegis operating system project.</description>
+    <language>en-us</language>
+    <item>
+      <title>Aegis 1.5.0: the multi-core bug that resisted everything, found and killed</title>
+      <link>https://github.com/exec/aegis/releases/tag/v1.5.0</link>
+      <pubDate>Sat, 27 Jun 2026 12:00:00 -0500</pubDate>
+      <description><![CDATA[A stability-and-security release &mdash; around <b>50 verified fixes</b> from a single overnight hardening pass, every one rebuilt clean and re-tested together, then proven on real hardware. The headliner: the multi-core scheduling crash that had defeated every attempt for months. It turned out the scheduler could, under load, pick the <i>same</i> task to run on <b>two CPUs at once</b> &mdash; one process, one kernel stack, executing on two cores and scribbling over itself. The wreckage <i>looked</i> like memory corruption from a dozen directions, which is why it hid so long; the fix is a one-line guard at each place the scheduler chooses what to run next. Zero crashes in ~200 boots, against a 1-in-4 baseline. Riding along: an exception-table change that makes a whole <i>class</i> of kernel panic impossible (a buggy or hostile program can no longer crash the kernel by yanking memory out from under a syscall), three use-after-frees, two double-frees, a missing futex operation that hung every contended pthread condition variable, several filesystem leaks and a malformed-disk crash &mdash; and the boot chime plays in full again instead of cutting off after two seconds. 1.5 feels like a halfway point to me: well past "first release," not yet the thing I'm building toward. Expect more 1.x releases &mdash; quite possibly up to 1.9 &mdash; before a 2.0 is on the table.]]></description>
+    </item>
+    <item>
+      <title>Aegis 1.2.7: DNS that doesn't trip over the clock</title>
+      <link>https://github.com/exec/aegis/releases/tag/v1.2.7</link>
+      <pubDate>Sun, 15 Jun 2026 17:00:00 -0500</pubDate>
+      <description><![CDATA[A small, real fix. Aegis's DNS resolver (down in the C library) times its own retries against a clock &mdash; and it was reading the <i>wall</i> clock, the one that gets corrected whenever the system syncs time. The trouble: a wall clock can jump <i>backward</i>, and the resolver's elapsed-time math is unsigned, so a backward step turns a tiny interval into an enormous one &mdash; which could stall a name lookup at exactly the wrong moment, right as the clock is first being set during boot. The fix points the resolver at the <b>monotonic</b> clock instead: the one that only ever counts forward and is never adjusted, which is what an interval timer should always use. One line in the rebuilt library, but it removes a whole class of intermittent "why did that lookup hang?" flakiness. Verified by rebuilding the entire userland against the patched library and confirming real hostnames still resolve cleanly.]]></description>
+    </item>
+    <item>
+      <title>Aegis 1.2.6: twice the connections, a lighter kernel</title>
+      <link>https://github.com/exec/aegis/releases/tag/v1.2.6</link>
+      <pubDate>Sun, 15 Jun 2026 16:00:00 -0500</pubDate>
+      <description><![CDATA[Every live TCP connection needs a couple of buffers for data in flight &mdash; about 24&nbsp;KB apiece. Aegis reserved those <i>inline</i> for every possible connection slot, drawn from the kernel's tightest memory budget &mdash; so each potential connection cost the scarcest kind of memory whether or not it was ever used, and that budget capped how many connections the system could track. This release moves those buffers to a roomier pool (set up once at boot), which does two good things at once: it <b>doubles the connection limit</b> (64&rarr;128) <i>and</i> hands ~1.5&nbsp;MB back to the tight budget &mdash; re-doubling the headroom 1.2.5 had just spent. The interesting part is what it <i>avoids</i>: the obvious approach &mdash; grab a buffer when a connection opens &mdash; would put a heavyweight memory operation on the inbound-packet fast path, inside an interrupt, holding a lock. Instead the buffers are allocated once and simply never torn down, which as a bonus makes an entire class of use-after-free bug <i>impossible by construction</i>. Verified by hammering it with 200 back-to-back connections recycling every slot &mdash; all clean. Fewer moving parts, twice the room.]]></description>
+    </item>
+    <item>
+      <title>Aegis 1.2.5: room to grow</title>
+      <link>https://github.com/exec/aegis/releases/tag/v1.2.5</link>
+      <pubDate>Sun, 15 Jun 2026 15:00:00 -0500</pubDate>
+      <description><![CDATA[A capacity release. The kernel had a self-imposed memory ceiling &mdash; it mapped only 6&nbsp;MB of itself at runtime &mdash; so pushing any of its internal tables past a point simply <i>wouldn't boot</i>. We raised that ceiling to 8&nbsp;MB (the kernel always had the room reserved; one of its own page tables just wasn't using it) and spent the headroom: <b>four times as many processes</b> (64&rarr;256), <b>double the TCP connections and network sockets</b>, double the local IPC bus, and four times the open files per process. The relocation it took to get there &mdash; sliding the kernel's transient memory-mapping window and its virtual-allocator base each up one slot &mdash; is the kind of load-bearing surgery you verify twice: it either boots cleanly or page-faults instantly, and it came up green on the first hardware boot. This release also finishes the cleanup 1.2.4 started: every error the kernel returns now has a <i>name</i> instead of a bare magic number, across both the syscall layer and the networking/filesystem internals &mdash; with the deliberate restraint of leaving the "not found" sentinels alone (they were never errnos). Boring plumbing; more room to run real software.]]></description>
+    </item>
+    <item>
+      <title>Aegis 1.2.4: paying down the growing pains</title>
+      <link>https://github.com/exec/aegis/releases/tag/v1.2.4</link>
+      <pubDate>Sun, 15 Jun 2026 01:00:00 -0500</pubDate>
+      <description><![CDATA[A foundations release, in the spirit of the last one. A kernel grown by hand accumulates <i>near-duplicates</i> &mdash; nine slightly-different ring buffers, a few hundred raw errno numbers, dozens of copy-pasted "check the user pointer, then copy it" sequences, five ways to look up a file descriptor, two copies of an address-range allocator, a <code>/dev</code> table kept in sync by hand in three places. Every copy is a chance for the copies to drift apart, and drift is where bugs live. This release collapses each pattern into <b>one</b> audited primitive and routes every caller through it: one byte-ring, one errno header, one validate-and-copy macro, one descriptor resolver, one free-list, one device table. About 800 lines of duplication deleted, behaviour otherwise unchanged. The safety net earned its keep: review caught a use-after-free-class bug where the very first socket on the system (descriptor zero) resolved as "not found" and broke the desktop login, plus a memory-budget overflow &mdash; both fixed before they shipped. Verified end to end on real hardware: boot, the desktop, the terminal, a live TCP fetch and the package manager all came up green. Boring on the outside, sturdier underneath.]]></description>
+    </item>
+    <item>
+      <title>Aegis 1.2.3: one way to wait</title>
+      <link>https://github.com/exec/aegis/releases/tag/v1.2.3</link>
+      <pubDate>Sun, 14 Jun 2026 23:00:00 -0500</pubDate>
+      <description><![CDATA[A foundations release. Any operating system kernel spends a lot of its life <i>waiting</i> &mdash; a process parked on an empty pipe, a socket with no data yet, a key not yet pressed. Aegis had grown roughly two dozen hand-written copies of the "go to sleep until something happens" dance, each subtly different and each its own chance to lose a wakeup and hang forever. We replaced all of them with <b>one</b> audited primitive, <code>wait_event</code>. Pipes, TCP and Unix sockets, pseudo-terminals, the keyboard and the mouse now share a single, race-free blocking path; the tricky part &mdash; the loop, the wakeup ordering, the memory barriers &mdash; lives in exactly one place that's hard to get wrong. Along the way each conversion fixed a latent bug where two threads waiting on the same object could lose a wakeup. Verified end to end on real hardware: a live TCP fetch, the desktop, the terminal, and the package manager all came up green. Less code, fewer places for a hang to hide, and a foundation that should outlast everything built on top of it.]]></description>
+    </item>
+    <item>
+      <title>Aegis 1.2.2: locking down authority, and a scheduler hang</title>
+      <link>https://github.com/exec/aegis/releases/tag/v1.2.2</link>
+      <pubDate>Sun, 14 Jun 2026 21:30:00 -0500</pubDate>
+      <description><![CDATA[A security-and-correctness patch. Aegis exists to prove that <b>no process &mdash; not even root &mdash; holds ambient authority</b>, and a code review found two ways that leaked. First: the kernel grants a binary's capabilities based on where it lives (<code>/bin</code>, <code>/sbin</code>, <code>/apps</code>), but only <code>/apps</code> was write-protected &mdash; so a root shell could overwrite <code>/bin/login</code> and forge authority by filename. Now the trusted tree and the write-protected tree are the same set. Second: <code>setuid()</code> would let a privileged helper become <i>any</i> user including root; it's now bound to the identity whose password was actually checked at login. Separately, the scheduler had a classic <b>lost-wakeup race</b>: a process could block on a read or poll at the exact instant its data arrived and sleep forever. That window is closed, and four blocking paths (sleep, connect, vfork, futex) were hardened along the way.]]></description>
+    </item>
+    <item>
+      <title>Aegis 1.2.1: network hangs squashed, four new apps</title>
+      <link>https://github.com/exec/aegis/releases/tag/v1.2.1</link>
+      <pubDate>Sun, 14 Jun 2026 18:00:00 -0500</pubDate>
+      <description><![CDATA[The 1.2.1 patch lands a serious fix: blocking network syscalls are now <b>signal-interruptible</b> &mdash; Ctrl-C can finally kill a process hung on I/O. A five-agent audit traced an uninterruptible "herald install" hang to five compounding bugs (missing EINTR checks, a failed TCP connect that never surfaced to poll(), an infinite-timeout poll with no wake, a leaked TCP connection slot, and colliding ephemeral ports) &mdash; all fixed. DNS got reliable parallel fallback resolvers. And four apps shipped: <b>Snake</b>, <b>Minesweeper</b>, an <b>image viewer</b>, and the <b>Feeds</b> RSS reader you're holding.]]></description>
+    </item>
+    <item>
+      <title>Networking comes alive: DNS, TCP and UDP overhauled</title>
+      <link>https://github.com/exec/aegis</link>
+      <pubDate>Sat, 13 Jun 2026 23:00:00 -0500</pubDate>
+      <description><![CDATA[A four-deep chain of musl ABI gaps had left DNS resolution completely broken &mdash; only <code>/etc/hosts</code> names resolved. socket() now masks SOCK_CLOEXEC/SOCK_NONBLOCK, bind(0) assigns an ephemeral port, sendto() implicitly binds a source port, and a five-agent audit hardened TCP retransmission, the UDP demux, AF_UNIX, and epoll. The result: <b>real HTTPS, on real hardware</b>.]]></description>
+    </item>
+    <item>
+      <title>Herald: a signed package manager, end to end</title>
+      <link>https://herald.byexec.com</link>
+      <pubDate>Sat, 13 Jun 2026 22:30:00 -0500</pubDate>
+      <description><![CDATA[Herald now installs ECDSA-P256 signed packages straight from herald.byexec.com over HTTPS &mdash; fetch, verify, extract into an /apps bundle, and run. 2048 was the first app pulled from the live repo on hardware. The trust chain runs Release &rarr; Packages &rarr; package hash.]]></description>
+    </item>
+    <item>
+      <title>Games on a from-scratch kernel: Snake, Minesweeper, 2048</title>
+      <link>https://github.com/exec/aegis</link>
+      <pubDate>Sat, 13 Jun 2026 22:00:00 -0500</pubDate>
+      <description><![CDATA[Three Lumen-client games now install from the repo: 2048, Snake (arrows/WASD, speed ramp) and Minesweeper (left-reveal, right-flag, flood-fill, first-click safety). Each is a native window on the Lumen compositor, rendered with the Glyph toolkit.]]></description>
+    </item>
+    <item>
+      <title>You are reading this in Feeds, a native RSS reader</title>
+      <link>https://github.com/exec/aegis</link>
+      <pubDate>Sat, 13 Jun 2026 23:30:00 -0500</pubDate>
+      <description><![CDATA[Feeds is a three-pane RSS/Atom reader built by a team of agents: a curl-backed fetcher, a hostile-input-safe RSS+Atom parser, an HTML-to-text cleaner, a persistence layer, and a Lumen GUI. It fetches over the very networking stack described above. Meta, isn't it?]]></description>
+    </item>
+  </channel>
+</rss>

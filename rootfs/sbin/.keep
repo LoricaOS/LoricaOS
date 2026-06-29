@@ -1,0 +1,14 @@
+This file exists only to materialize /sbin in the shipped ext2 image.
+
+/sbin is one of the kernel's trusted-path granting anchors (cap_policy_lookup
+in kernel/cap/cap_policy.c: a binary under /sbin/ may derive policy caps). The
+load-bearing invariant (CLAUDE.md 1.2.2) is that the trusted-for-granting tree
+MUST equal the write-protected tree: ext2_mount records s_sbin_ino and any
+mutation under /sbin then requires CAP_KIND_INSTALL.
+
+If /sbin does not exist in the image, its inode is never recorded, so it is NOT
+write-protected — yet cap_policy_lookup still trusts the /sbin/ path prefix. A
+DAC-permitted writer could then `mkdir /sbin; cp forged /sbin/login` and forge
+authority (e.g. AUTH) by basename, defeating no-ambient-authority. Keeping this
+empty file ships /sbin so it is recorded and protected at mount. Same pattern as
+/lib/ladybird/.keep. Do not remove without also removing /sbin from the anchor.

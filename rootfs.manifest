@@ -1,0 +1,164 @@
+# Aegis rootfs manifest — single source of truth for disk contents
+#
+# Format: SOURCE DEST
+# - Lines starting with # are comments, blank lines ignored
+# - Parent directories are created automatically
+# - Everything under /bin, /lib and /apps gets mode 0100755
+# - Everything else keeps default mode (0644)
+#   (app.ini manifests are NOT listed here — they live in the rootfs/
+#   skeleton at rootfs/apps/<id>/app.ini and are copied with mode 0644)
+
+# Dynamic linker — single real copy at the PT_INTERP path; build-rootfs.sh
+# creates /lib/libc.so as an ext2 symlink to it (debugfs `symlink`).
+build/musl-dynamic/usr/lib/libc.so  /lib/ld-musl-x86_64.so.1
+
+# Core system binaries
+user/bin/shell/shell.elf        /bin/sh
+# C++ runtime smoke test (browser-port P1 gate) — built with the Aegis C++
+# cross toolchain (GCC 15.1 musl). Proves exceptions/RTTI/STL/iostream on Aegis.
+build/cpptest                   /bin/cpptest
+user/bin/login/login.elf        /bin/login
+user/bin/vigil/vigil            /bin/vigil
+user/bin/vigictl/vigictl        /bin/vigictl
+user/bin/bastion/bastion.elf    /bin/bastion
+user/bin/lumen/lumen.elf        /bin/lumen
+user/bin/citadel-dock/citadel-dock.elf /bin/citadel-dock
+user/bin/stsh/stsh.elf          /bin/stsh
+user/bin/installer/installer.elf /bin/installer
+user/bin/applications/applications.elf /bin/applications
+
+# SSH server: tinysshd (daemon) + sshd (TCP superserver front-end) +
+# tinysshd-makekey (ed25519 host-key generation at first boot).
+user/bin/sshd/sshd.elf          /bin/sshd
+build/tinyssh/tinysshd          /bin/tinysshd
+build/tinyssh/tinysshd-makekey  /bin/tinysshd-makekey
+
+# herald — package manager (links BearSSL). Signed sample package + its
+# detached signature are staged for the demo and tests/tests/herald_test.rs.
+user/bin/herald/herald.elf      /bin/herald
+build/herald-sample.hpkg        /usr/share/herald/sample.hpkg
+build/herald-sample.hpkg.sig    /usr/share/herald/sample.hpkg.sig
+
+# GUI app bundles — /apps/<id>/<id> + rootfs/apps/<id>/app.ini skeleton.
+# vigil removes the gui-installer bundle on first installed boot.
+user/bin/gui-installer/gui-installer.elf /apps/gui-installer/gui-installer
+user/bin/settings/settings.elf  /apps/settings/settings
+user/bin/terminal/terminal.elf  /apps/terminal/terminal
+user/bin/calculator/calculator.elf /apps/calculator/calculator
+user/bin/editor/editor.elf      /apps/editor/editor
+user/bin/filemanager/filemanager.elf /apps/filemanager/filemanager
+user/bin/run/run.elf            /apps/run/run
+user/bin/tunes/tunes.elf        /apps/tunes/tunes
+user/bin/calendar/calendar.elf  /apps/calendar/calendar
+user/bin/imageviewer/imageviewer.elf /apps/imageviewer/imageviewer
+user/bin/sysmon/sysmon.elf      /apps/sysmon/sysmon
+user/bin/netman/netman.elf      /apps/netman/netman
+
+# Coreutils
+user/bin/ls/ls.elf              /bin/ls
+user/bin/cat/cat.elf            /bin/cat
+user/bin/echo/echo.elf          /bin/echo
+user/bin/sleep/sleep.elf        /bin/sleep
+user/bin/pwd/pwd.elf            /bin/pwd
+user/bin/uname/uname.elf        /bin/uname
+user/bin/clear/clear.elf        /bin/clear
+user/bin/true/true.elf          /bin/true
+user/bin/false/false.elf        /bin/false
+user/bin/wc/wc.elf              /bin/wc
+user/bin/grep/grep.elf          /bin/grep
+user/bin/sort/sort.elf          /bin/sort
+user/bin/mv/mv.elf              /bin/mv
+user/bin/cp/cp.elf              /bin/cp
+user/bin/rm/rm.elf              /bin/rm
+user/bin/mkdir/mkdir.elf        /bin/mkdir
+user/bin/rmdir/rmdir.elf        /bin/rmdir
+user/bin/ps/ps.elf              /bin/ps
+user/bin/kill/kill.elf          /bin/kill
+user/bin/free/free.elf          /bin/free
+user/bin/uptime/uptime.elf      /bin/uptime
+user/bin/du/du.elf              /bin/du
+user/bin/pgrep/pgrep.elf        /bin/pgrep
+user/bin/pkill/pkill.elf        /bin/pkill
+user/bin/xargs/xargs.elf        /bin/xargs
+user/bin/more/more.elf          /bin/more
+user/bin/diff/diff.elf          /bin/diff
+user/bin/dmesg/dmesg.elf        /bin/dmesg
+user/bin/df/df.elf              /bin/df
+user/bin/touch/touch.elf        /bin/touch
+user/bin/whoami/whoami.elf      /bin/whoami
+user/bin/ln/ln.elf              /bin/ln
+user/bin/chmod/chmod.elf        /bin/chmod
+user/bin/chown/chown.elf        /bin/chown
+user/bin/readlink/readlink.elf  /bin/readlink
+# poll-test is used by tests/tests/poll_concurrent_pollers_test.rs (test ISOs
+# share this rootfs). The older /bin/polltest had no test references — dropped.
+user/bin/poll-test/poll-test.elf /bin/poll-test
+
+# Coreutils added in 1.0.3
+user/bin/head/head.elf          /bin/head
+user/bin/tail/tail.elf          /bin/tail
+user/bin/basename/basename.elf  /bin/basename
+user/bin/dirname/dirname.elf    /bin/dirname
+user/bin/tee/tee.elf            /bin/tee
+user/bin/env/env.elf            /bin/env
+user/bin/date/date.elf          /bin/date
+user/bin/hostname/hostname.elf  /bin/hostname
+user/bin/ip/ip.elf              /bin/ip
+user/bin/ip/ip.elf              /bin/ifconfig
+user/bin/sync/sync.elf          /bin/sync
+user/bin/tr/tr.elf              /bin/tr
+user/bin/cut/cut.elf            /bin/cut
+user/bin/expand/expand.elf      /bin/expand
+user/bin/realpath/realpath.elf  /bin/realpath
+user/bin/stat/stat.elf          /bin/stat
+user/bin/yes/yes.elf            /bin/yes
+user/bin/test/test.elf          /bin/test
+user/bin/test/bracket.elf       /bin/[
+user/bin/find/find.elf          /bin/find
+user/bin/which/which.elf        /bin/which
+user/bin/uniq/uniq.elf          /bin/uniq
+
+# Network / services
+user/bin/httpd/httpd.elf        /bin/httpd
+user/bin/nettest/nettest.elf    /bin/nettest
+user/bin/dltest/dltest.elf      /bin/dltest
+user/bin/perfbench-ipc/perfbench-ipc.elf /bin/perfbench-ipc
+user/bin/sockreftest/sockreftest.elf /bin/sockreftest
+user/bin/captest/captest.elf    /bin/captest
+user/bin/cowtest/cowtest.elf    /bin/cowtest
+user/bin/contresume/contresume.elf /bin/contresume
+user/bin/spawnleak/spawnleak.elf /bin/spawnleak
+user/bin/elffuzz/elffuzz.elf /bin/elffuzz
+user/bin/sysfuzz/sysfuzz.elf /bin/sysfuzz
+user/bin/fduaf/fduaf.elf /bin/fduaf
+user/bin/blkuaf/blkuaf.elf /bin/blkuaf
+user/bin/extabtest/extabtest.elf /bin/extabtest
+user/bin/smpstress/smpstress.elf /bin/smpstress
+user/bin/futexstress/futexstress.elf /bin/futexstress
+user/bin/mmfaultstress/mmfaultstress.elf /bin/mmfaultstress
+user/bin/vforkstress/vforkstress.elf /bin/vforkstress
+user/bin/forkbench/forkbench.elf /bin/forkbench
+user/bin/dhcp/dhcp              /bin/dhcp
+user/bin/chronos/chronos        /bin/chronos
+build/curl/curl                 /bin/curl
+tools/cacert.pem                /etc/ssl/certs/ca-certificates.crt
+
+# System control
+user/bin/shutdown/shutdown.elf  /bin/shutdown
+user/bin/reboot/reboot.elf      /bin/reboot
+user/bin/aegisctl/aegisctl.elf  /bin/aegisctl
+user/bin/rune                   /bin/rune
+
+# Diagnostic — exercises lumen_connect + window_create end-to-end.
+# Used by tests/tests/lumen_connect_probe_test.rs.
+user/bin/lumen-probe/lumen-probe.elf  /bin/lumen-probe
+
+# The Ladybird-engine browser bundle (/lib/ladybird) is NOT baked into the base
+# image — it ships in the signed herald package "lantern" (engine .so closure +
+# the /apps/lantern launcher). The trusted-path anchor for /lib/ladybird is now
+# DYNAMIC: herald appends it to /etc/aegis/anchors on install (from the package's
+# paths= line) and calls sys_install_commit, after which the kernel both grants
+# policy caps to and write-protects the tree. No baked-in placeholder dir is
+# needed (the old static s_ladybird_ino mount-time anchor is gone).
+
+build/b64 /bin/b64

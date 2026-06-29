@@ -1,0 +1,4 @@
+PS1='root@aegis:${PWD:-/}# '
+export PS1
+PATH=/bin
+export PATH

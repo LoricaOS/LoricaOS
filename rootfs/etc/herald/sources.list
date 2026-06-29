@@ -1,0 +1,7 @@
+# herald package sources — one repository per line:
+#   <base-url> <suite> <component>
+# The base-url is the repository root; herald fetches <base-url>/dists/<suite>/
+# Release (+ .sig) and <base-url>/dists/<suite>/<component>/binary-<arch>/Packages.
+# Every artifact is ECDSA-P256 verified after download, so the transport is not
+# part of the trusted computing base.
+https://herald.byexec.com stable main
