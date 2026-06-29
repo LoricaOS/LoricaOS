@@ -206,6 +206,19 @@ if [[ "$WANT_ASSETS" == 1 ]]; then
     fi
 fi
 
+# ── Pre-seed the herald installed-package database (DESKTOP profile only) ─────
+# The desktop image ships the graphical stack as a set of herald packages
+# (tools/build-component-pkgs.sh) and records them as installed, so `herald list`
+# on the live/installed desktop shows the whole stack — standard distro image
+# practice (seed the package db at build time). build/pkgs/herald-db is
+# id<TAB>version<TAB>exec<TAB>sha256, one line per component + the desktop meta.
+# A server image skips this, so its `herald list` is empty.
+if [[ "$PROFILE" == desktop && -f build/pkgs/herald-db ]]; then
+    ensure_dir "/var/lib/herald"
+    debugfs_run "write build/pkgs/herald-db /var/lib/herald/db"
+    echo "[rootfs] seeded herald db ($(grep -c . build/pkgs/herald-db) packages)"
+fi
+
 # NOTE: no kernel copy in the rootfs. The installed system boots the kernel
 # from the FAT ESP (esp.img carries boot/aegis.elf; see the Makefile $(ESP_IMG)
 # rule and gen-limine-conf.sh installed mode) — a rootfs /boot/aegis.elf would

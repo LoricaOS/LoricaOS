@@ -336,7 +336,12 @@ SKELETON_FILES_DESKTOP := $(shell find rootfs-desktop -type f 2>/dev/null)
 $(ROOTFS_SERVER): $(MANIFEST_SRCS_BASE) $(SKELETON_FILES_BASE)
 	AEGIS_PROFILE=server bash tools/build-rootfs.sh $@
 
-$(ROOTFS_DESKTOP): $(MANIFEST_SRCS_BASE) $(MANIFEST_SRCS_DESKTOP) $(SKELETON_FILES_BASE) $(SKELETON_FILES_DESKTOP) $(BUILD)/logo.raw $(BUILD)/claude.raw
+# Per-component desktop packages + the herald db the desktop image pre-seeds so
+# `herald list` shows the graphical stack as installed (tools/build-component-pkgs.sh).
+$(BUILD)/pkgs/herald-db: $(MANIFEST_SRCS_DESKTOP) $(SKELETON_FILES_DESKTOP) $(BUILD)/logo.raw $(BUILD)/claude.raw tools/build-component-pkgs.sh
+	bash tools/build-component-pkgs.sh
+
+$(ROOTFS_DESKTOP): $(MANIFEST_SRCS_BASE) $(MANIFEST_SRCS_DESKTOP) $(SKELETON_FILES_BASE) $(SKELETON_FILES_DESKTOP) $(BUILD)/logo.raw $(BUILD)/claude.raw $(BUILD)/pkgs/herald-db
 	AEGIS_PROFILE=desktop bash tools/build-rootfs.sh $@ "" $(BUILD)/logo.raw $(BUILD)/claude.raw
 
 rootfs: $(ROOTFS_DESKTOP) $(ROOTFS_SERVER)
