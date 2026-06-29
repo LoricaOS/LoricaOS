@@ -12,8 +12,20 @@ WALLPAPER_RAW="${2:-}"
 LOGO_RAW="${3:-}"
 CLAUDE_RAW="${4:-}"
 
-MANIFEST="rootfs.manifest"
-SKELETON="rootfs"
+# Profile selects which manifests + skeleton trees compose the image:
+#   desktop (default): base + graphical (compositor, toolkit, GUI apps, fonts)
+#   server:            base only — no graphical stack, no fonts/wallpaper
+PROFILE="${AEGIS_PROFILE:-desktop}"
+if [[ "$PROFILE" == server ]]; then
+    SKELETONS=("rootfs")
+    MANIFESTS=("rootfs.manifest")
+    WANT_ASSETS=0
+else
+    SKELETONS=("rootfs" "rootfs-desktop")
+    MANIFESTS=("rootfs.manifest" "rootfs.desktop.manifest")
+    WANT_ASSETS=1
+fi
+echo "[rootfs] profile: $PROFILE  (skeletons: ${SKELETONS[*]})"
 # 44 MiB LOGICAL rootfs ext2 (512-byte sectors), but the image is TRUNCATED to
 # its last non-zero block before shipping (see the truncate step at the end), so
 # the ISO carries only the ~14 MiB of real content — NOT the ~30 MiB of trailing
@@ -69,27 +81,31 @@ ensure_dir() {
 # Walk the rootfs/ skeleton and replicate its structure + files into the image.
 echo "[rootfs] Copying skeleton..."
 
-# First pass: create all directories
-while IFS= read -r -d '' dir; do
-    rel="${dir#$SKELETON}"
-    [[ -z "$rel" ]] && continue
-    ensure_dir "$rel"
-done < <(find "$SKELETON" -type d -print0 | sort -z)
+# First pass: create all directories (across every skeleton tree in the profile)
+for SK in "${SKELETONS[@]}"; do
+    while IFS= read -r -d '' dir; do
+        rel="${dir#$SK}"
+        [[ -z "$rel" ]] && continue
+        ensure_dir "$rel"
+    done < <(find "$SK" -type d -print0 | sort -z)
+done
 
 # Second pass: copy all files. /etc/motd carries the __AEGIS_VERSION__ placeholder
 # (single source of truth: the AEGIS_VERSION exported by the Makefile from git) —
 # substitute it at pack time so the login banner always matches the real version.
 MOTD_TMP=""
-while IFS= read -r -d '' file; do
-    rel="${file#$SKELETON}"
-    if [[ "$rel" == "/etc/motd" ]]; then
-        MOTD_TMP="$(mktemp)"
-        sed "s/__AEGIS_VERSION__/${AEGIS_VERSION:-untracked}/g" "$file" > "$MOTD_TMP"
-        debugfs_run "write $MOTD_TMP $rel"
-    else
-        debugfs_run "write $file $rel"
-    fi
-done < <(find "$SKELETON" -type f -print0 | sort -z)
+for SK in "${SKELETONS[@]}"; do
+    while IFS= read -r -d '' file; do
+        rel="${file#$SK}"
+        if [[ "$rel" == "/etc/motd" ]]; then
+            MOTD_TMP="$(mktemp)"
+            sed "s/__AEGIS_VERSION__/${AEGIS_VERSION:-untracked}/g" "$file" > "$MOTD_TMP"
+            debugfs_run "write $MOTD_TMP $rel"
+        else
+            debugfs_run "write $file $rel"
+        fi
+    done < <(find "$SK" -type f -print0 | sort -z)
+done
 [[ -n "$MOTD_TMP" ]] && rm -f "$MOTD_TMP"
 
 # ── Process manifest: copy binaries ─────────────────────────────────────────
@@ -140,7 +156,7 @@ while IFS= read -r line; do
     if [[ "$dest" == /bin/* || "$dest" == /lib/* || "$dest" == /apps/* ]]; then
         CHMOD_CMDS+="set_inode_field $dest mode 0100755\n"
     fi
-done < "$MANIFEST"
+done < <(cat "${MANIFESTS[@]}")
 
 # /lib/libc.so is a symlink to the dynamic linker — one copy on disk instead
 # of two. PT_INTERP in every dynamic binary is /lib/ld-musl-x86_64.so.1 (the
@@ -155,7 +171,7 @@ debugfs_run "symlink /lib/libc.so /lib/ld-musl-x86_64.so.1"
 # inode recorded as s_admin_ino in ext2.c), which survives a bad file mode; this
 # 0600 is belt-and-suspenders so a non-AUTH reader is denied even before the
 # gate. Only added if the file was actually written into the image.
-if [[ -e "$SKELETON/etc/aegis/admin" ]]; then
+if [[ -e rootfs/etc/aegis/admin ]]; then
     CHMOD_CMDS+="set_inode_field /etc/aegis/admin mode 0100600\n"
 fi
 
@@ -165,25 +181,29 @@ if [[ -n "$CHMOD_CMDS" ]]; then
     printf "$CHMOD_CMDS" | $DEBUGFS -w "$ROOTFS_IMG" >/dev/null 2>&1
 fi
 
-# ── Optional assets ──────────────────────────────────────────────────────────
+# ── Optional graphical assets (DESKTOP profile only) ─────────────────────────
+# Logo/wallpaper raws and TTF fonts exist only for the GUI greeter + Glyph text
+# rendering. A server image has no compositor and uses the kernel's built-in
+# console font, so it ships none of these.
 ensure_dir "/usr"
 ensure_dir "/usr/share"
 
-for raw_file in "$WALLPAPER_RAW" "$LOGO_RAW" "$CLAUDE_RAW"; do
-    if [[ -n "$raw_file" && -f "$raw_file" && -s "$raw_file" ]]; then
-        name="$(basename "$raw_file")"
-        debugfs_run "write $raw_file /usr/share/$name"
-    fi
-done
-
-# TTF fonts
-if [[ -d assets ]]; then
-    ensure_dir "/usr/share/fonts"
-    for ttf in assets/*.ttf; do
-        [[ -f "$ttf" ]] || continue
-        name="$(basename "$ttf")"
-        debugfs_run "write $ttf /usr/share/fonts/$name"
+if [[ "$WANT_ASSETS" == 1 ]]; then
+    for raw_file in "$WALLPAPER_RAW" "$LOGO_RAW" "$CLAUDE_RAW"; do
+        if [[ -n "$raw_file" && -f "$raw_file" && -s "$raw_file" ]]; then
+            name="$(basename "$raw_file")"
+            debugfs_run "write $raw_file /usr/share/$name"
+        fi
     done
+
+    if [[ -d assets ]]; then
+        ensure_dir "/usr/share/fonts"
+        for ttf in assets/*.ttf; do
+            [[ -f "$ttf" ]] || continue
+            name="$(basename "$ttf")"
+            debugfs_run "write $ttf /usr/share/fonts/$name"
+        done
+    fi
 fi
 
 # NOTE: no kernel copy in the rootfs. The installed system boots the kernel

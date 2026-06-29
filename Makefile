@@ -13,14 +13,17 @@ AEGIS_VERSION    := $(AEGIS_OS_VERSION)
 export AEGIS_VERSION
 
 BUILD  = build
-ROOTFS = $(BUILD)/rootfs.img
-ISO_DIR = $(BUILD)/isodir
+# Two production profiles share one source tree (Phase 1 of the graphical peel):
+#   desktop — full graphical stack (rootfs + rootfs-desktop skeletons/manifests)
+#   server  — no graphical anything (rootfs/rootfs.manifest only)
+ROOTFS_DESKTOP = $(BUILD)/rootfs-desktop.img
+ROOTFS_SERVER  = $(BUILD)/rootfs-server.img
 
 # C++ cross toolchain (used by build/cpptest fixture; provisioned out-of-repo)
 CXX_AEGIS       = /opt/aegis-cxx/bin/x86_64-buildroot-linux-musl-g++
 CXX_FLAGS_AEGIS = -static -O2 -std=c++23 -fno-pie -no-pie
 
-.PHONY: all iso selftest-iso rootfs build-musl test clean version curl_bin
+.PHONY: all iso desktop-iso server-iso selftest-iso rootfs build-musl test clean version curl_bin
 all: iso
 
 # ── Kernel artifact: fetched, not built ─────────────────────────────────────
@@ -220,7 +223,8 @@ user/bin/rune:
 # ── Limine bootloader: host tool + installer ESP image ──────────────────
 LIMINE_DIR = tools/limine
 LIMINE_BIN = $(BUILD)/limine
-ESP_IMG    = $(BUILD)/esp.img
+ESP_DESKTOP = $(BUILD)/esp-desktop.img
+ESP_SERVER  = $(BUILD)/esp-server.img
 HOSTCC    ?= cc
 
 # Build Limine's host tool from the vendored source (used by `limine bios-install`).
@@ -240,18 +244,28 @@ $(LIMINE_BIN): $(LIMINE_DIR)/limine.c $(LIMINE_DIR)/limine-bios-hdd.h
 # layout and raw copy both derive from that constant. Content is ~1.3 MiB
 # (BOOTX64.EFI + stripped kernel + limine.conf); 4 MiB leaves headroom and
 # clears the FAT16 minimum-cluster floor.
-$(ESP_IMG): $(LIMINE_DIR)/BOOTX64.EFI $(LIMINE_DIR)/BOOTIA32.EFI $(KERNEL_STRIPPED) tools/gen-limine-conf.sh
+# $(1)=ESP image  $(2)=gen-limine installed-mode (installed | server-installed).
+# The installed-boot menu differs by profile: desktop defaults to graphical,
+# server is text-only (no compositor to boot into).
+define ESP_RULE
 	@mkdir -p $(BUILD)
-	sh tools/gen-limine-conf.sh installed > $(BUILD)/limine-installed.conf
-	dd if=/dev/zero of=$(ESP_IMG) bs=512 count=8192 2>/dev/null
-	/sbin/mkfs.fat -F 16 -s 1 $(ESP_IMG) >/dev/null 2>&1   # -s 1 (512B clusters): 4 MiB needs >4085 clusters for FAT16
-	mmd -i $(ESP_IMG) ::EFI
-	mmd -i $(ESP_IMG) ::EFI/BOOT
-	mmd -i $(ESP_IMG) ::boot
-	mcopy -i $(ESP_IMG) $(LIMINE_DIR)/BOOTX64.EFI ::EFI/BOOT/BOOTX64.EFI
-	mcopy -i $(ESP_IMG) $(LIMINE_DIR)/BOOTIA32.EFI ::EFI/BOOT/BOOTIA32.EFI
-	mcopy -i $(ESP_IMG) $(KERNEL_STRIPPED) ::boot/aegis.elf
-	mcopy -i $(ESP_IMG) $(BUILD)/limine-installed.conf ::limine.conf
+	sh tools/gen-limine-conf.sh $(2) > $(1).conf
+	dd if=/dev/zero of=$(1) bs=512 count=8192 2>/dev/null
+	/sbin/mkfs.fat -F 16 -s 1 $(1) >/dev/null 2>&1   # -s 1 (512B clusters): 4 MiB needs >4085 clusters for FAT16
+	mmd -i $(1) ::EFI
+	mmd -i $(1) ::EFI/BOOT
+	mmd -i $(1) ::boot
+	mcopy -i $(1) $(LIMINE_DIR)/BOOTX64.EFI ::EFI/BOOT/BOOTX64.EFI
+	mcopy -i $(1) $(LIMINE_DIR)/BOOTIA32.EFI ::EFI/BOOT/BOOTIA32.EFI
+	mcopy -i $(1) $(KERNEL_STRIPPED) ::boot/aegis.elf
+	mcopy -i $(1) $(1).conf ::limine.conf
+endef
+
+$(ESP_DESKTOP): $(LIMINE_DIR)/BOOTX64.EFI $(LIMINE_DIR)/BOOTIA32.EFI $(KERNEL_STRIPPED) tools/gen-limine-conf.sh
+	$(call ESP_RULE,$@,installed)
+
+$(ESP_SERVER): $(LIMINE_DIR)/BOOTX64.EFI $(LIMINE_DIR)/BOOTIA32.EFI $(KERNEL_STRIPPED) tools/gen-limine-conf.sh
+	$(call ESP_RULE,$@,server-installed)
 
 # ── Wallpaper / logo conversion ──���───────────────────────────────────────────
 $(BUILD)/logo.raw: tools/aegis-logo.png
@@ -272,12 +286,14 @@ $(BUILD)/claude.raw: assets/claude-white.png
 # ── ISO construction (Limine: BIOS + UEFI from one image) ───────────────
 # Shared staging + xorriso recipe for all three live ISOs.
 #   $(1) = ISO output   $(2) = staging dir   $(3) = gen-limine-conf.sh mode
+# $(1)=ISO output  $(2)=staging dir  $(3)=gen-limine live-mode
+# $(4)=rootfs image  $(5)=ESP image
 define LIMINE_ISO_RULE
 	@rm -rf $(2)
 	@mkdir -p $(2)/boot/limine $(2)/EFI/BOOT
 	cp $(KERNEL_STRIPPED) $(2)/boot/aegis.elf
-	cp $(ROOTFS) $(2)/boot/rootfs.img
-	cp $(ESP_IMG) $(2)/boot/esp.img
+	cp $(4) $(2)/boot/rootfs.img
+	cp $(5) $(2)/boot/esp.img
 	sh tools/gen-limine-conf.sh $(3) > $(2)/boot/limine/limine.conf
 	cp $(LIMINE_DIR)/limine-bios.sys $(LIMINE_DIR)/limine-bios-cd.bin $(LIMINE_DIR)/limine-uefi-cd.bin $(2)/boot/limine/
 	cp $(LIMINE_DIR)/BOOTX64.EFI $(LIMINE_DIR)/BOOTIA32.EFI $(2)/EFI/BOOT/
@@ -291,42 +307,60 @@ define LIMINE_ISO_RULE
 	$(LIMINE_BIN) bios-install $(1)
 endef
 
-$(BUILD)/aegis.iso: $(KERNEL_STRIPPED) $(ROOTFS) $(ESP_IMG) $(LIMINE_BIN) tools/gen-limine-conf.sh
-	$(call LIMINE_ISO_RULE,$@,$(ISO_DIR),live)
+# ── The two production ISOs ─────────────────────────────────────────────────
+$(BUILD)/aegis-desktop.iso: $(KERNEL_STRIPPED) $(ROOTFS_DESKTOP) $(ESP_DESKTOP) $(LIMINE_BIN) tools/gen-limine-conf.sh
+	$(call LIMINE_ISO_RULE,$@,$(BUILD)/desktop-isodir,live,$(ROOTFS_DESKTOP),$(ESP_DESKTOP))
 
-iso: $(BUILD)/aegis.iso
+$(BUILD)/aegis-server.iso: $(KERNEL_STRIPPED) $(ROOTFS_SERVER) $(ESP_SERVER) $(LIMINE_BIN) tools/gen-limine-conf.sh
+	$(call LIMINE_ISO_RULE,$@,$(BUILD)/server-isodir,server,$(ROOTFS_SERVER),$(ESP_SERVER))
 
-# Self-test ISO: same image, kernel cmdline carries `selftest` so vigil runs the
-# userland security probe (/bin/selftest -> /bin/captest) at boot.
-$(BUILD)/aspisos-test.iso: $(KERNEL_STRIPPED) $(ROOTFS) $(ESP_IMG) $(LIMINE_BIN) tools/gen-limine-conf.sh
-	$(call LIMINE_ISO_RULE,$@,$(BUILD)/selftest-isodir,selftest)
+desktop-iso: $(BUILD)/aegis-desktop.iso
+server-iso:  $(BUILD)/aegis-server.iso
+iso: desktop-iso server-iso
+
+# Self-test ISO: the desktop image (carries captest), kernel cmdline `selftest`
+# so vigil runs the userland security probe (/bin/selftest -> /bin/captest).
+$(BUILD)/aspisos-test.iso: $(KERNEL_STRIPPED) $(ROOTFS_DESKTOP) $(ESP_DESKTOP) $(LIMINE_BIN) tools/gen-limine-conf.sh
+	$(call LIMINE_ISO_RULE,$@,$(BUILD)/selftest-isodir,selftest,$(ROOTFS_DESKTOP),$(ESP_DESKTOP))
 selftest-iso: $(BUILD)/aspisos-test.iso
 
-MANIFEST_SRCS := $(shell grep -v '^\#' rootfs.manifest 2>/dev/null | awk 'NF>=2 {print $$1}')
-# Also depend on every file under the rootfs/ skeleton tree (cap policies,
-# vigil services, etc.) so editing /etc files actually triggers a rebuild.
-SKELETON_FILES := $(shell find rootfs -type f 2>/dev/null)
+# Manifest + skeleton sources, per layer. A rootfs rebuilds when any binary it
+# packs OR any skeleton file (cap policies, vigil services, /etc) changes.
+MANIFEST_SRCS_BASE    := $(shell grep -v '^\#' rootfs.manifest         2>/dev/null | awk 'NF>=2 {print $$1}')
+MANIFEST_SRCS_DESKTOP := $(shell grep -v '^\#' rootfs.desktop.manifest 2>/dev/null | awk 'NF>=2 {print $$1}')
+SKELETON_FILES_BASE    := $(shell find rootfs         -type f 2>/dev/null)
+SKELETON_FILES_DESKTOP := $(shell find rootfs-desktop -type f 2>/dev/null)
 
-# No kernel in the rootfs image: the installed system boots the kernel from
-# the FAT ESP (gen-limine-conf.sh installed mode reads boot():/boot/aegis.elf,
-# baked into esp.img above) — the old rootfs /boot/aegis.elf copy was dead
-# weight inside the fixed 44 MiB image.
-$(ROOTFS): $(MANIFEST_SRCS) $(SKELETON_FILES) $(BUILD)/logo.raw $(BUILD)/claude.raw
-	bash tools/build-rootfs.sh $@ "" $(BUILD)/logo.raw $(BUILD)/claude.raw
+# No kernel in the rootfs image: the installed system boots the kernel from the
+# FAT ESP (boot():/boot/aegis.elf) — see the ESP rules above.
+$(ROOTFS_SERVER): $(MANIFEST_SRCS_BASE) $(SKELETON_FILES_BASE)
+	AEGIS_PROFILE=server bash tools/build-rootfs.sh $@
 
-rootfs: $(ROOTFS)
+$(ROOTFS_DESKTOP): $(MANIFEST_SRCS_BASE) $(MANIFEST_SRCS_DESKTOP) $(SKELETON_FILES_BASE) $(SKELETON_FILES_DESKTOP) $(BUILD)/logo.raw $(BUILD)/claude.raw
+	AEGIS_PROFILE=desktop bash tools/build-rootfs.sh $@ "" $(BUILD)/logo.raw $(BUILD)/claude.raw
+
+rootfs: $(ROOTFS_DESKTOP) $(ROOTFS_SERVER)
 
 # ── Tests ───────────────────────────────────────────────────────────────────
 # (1) boot the live ISO → GUI greeter ("[BASTION] greeter ready") = kernel +
 #     userland + display stack all up.
 # (2) boot the selftest ISO → "[CAPTEST] ALL PASS" = userland capability model
 #     enforced (every privileged op denied to a baseline process).
-test: iso $(BUILD)/aspisos-test.iso
-	bash tools/ostest.sh $(BUILD)/aegis.iso
+# (1) desktop ISO  -> GUI greeter ("[BASTION] greeter ready").
+# (2) server  ISO  -> text console login ("[SERVERTEST] ...") + NO graphical
+#     binaries present.
+# (3) selftest ISO -> "[CAPTEST] ALL PASS" (userland capability model).
+test: desktop-iso server-iso $(BUILD)/aspisos-test.iso
+	bash tools/ostest.sh $(BUILD)/aegis-desktop.iso
+	bash tools/servertest.sh $(BUILD)/aegis-server.iso
 	bash tools/selftest.sh $(BUILD)/aspisos-test.iso
 
 version:
 	@echo "AspisOS $(AEGIS_OS_VERSION) (kernel $(KERNEL_VERSION))"
 
 clean:
-	rm -rf $(BUILD)/aegis.iso $(BUILD)/isodir $(BUILD)/rootfs.img $(BUILD)/esp.img
+	rm -rf $(BUILD)/aegis-desktop.iso $(BUILD)/aegis-server.iso $(BUILD)/aspisos-test.iso \
+	       $(BUILD)/desktop-isodir $(BUILD)/server-isodir $(BUILD)/selftest-isodir \
+	       $(BUILD)/rootfs-desktop.img $(BUILD)/rootfs-server.img \
+	       $(BUILD)/esp-desktop.img $(BUILD)/esp-server.img \
+	       $(BUILD)/esp-desktop.img.conf $(BUILD)/esp-server.img.conf

@@ -20,12 +20,8 @@ build/cpptest                   /bin/cpptest
 user/bin/login/login.elf        /bin/login
 user/bin/vigil/vigil            /bin/vigil
 user/bin/vigictl/vigictl        /bin/vigictl
-user/bin/bastion/bastion.elf    /bin/bastion
-user/bin/lumen/lumen.elf        /bin/lumen
-user/bin/citadel-dock/citadel-dock.elf /bin/citadel-dock
 user/bin/stsh/stsh.elf          /bin/stsh
 user/bin/installer/installer.elf /bin/installer
-user/bin/applications/applications.elf /bin/applications
 
 # SSH server: tinysshd (daemon) + sshd (TCP superserver front-end) +
 # tinysshd-makekey (ed25519 host-key generation at first boot).
@@ -38,21 +34,6 @@ build/tinyssh/tinysshd-makekey  /bin/tinysshd-makekey
 user/bin/herald/herald.elf      /bin/herald
 build/herald-sample.hpkg        /usr/share/herald/sample.hpkg
 build/herald-sample.hpkg.sig    /usr/share/herald/sample.hpkg.sig
-
-# GUI app bundles — /apps/<id>/<id> + rootfs/apps/<id>/app.ini skeleton.
-# vigil removes the gui-installer bundle on first installed boot.
-user/bin/gui-installer/gui-installer.elf /apps/gui-installer/gui-installer
-user/bin/settings/settings.elf  /apps/settings/settings
-user/bin/terminal/terminal.elf  /apps/terminal/terminal
-user/bin/calculator/calculator.elf /apps/calculator/calculator
-user/bin/editor/editor.elf      /apps/editor/editor
-user/bin/filemanager/filemanager.elf /apps/filemanager/filemanager
-user/bin/run/run.elf            /apps/run/run
-user/bin/tunes/tunes.elf        /apps/tunes/tunes
-user/bin/calendar/calendar.elf  /apps/calendar/calendar
-user/bin/imageviewer/imageviewer.elf /apps/imageviewer/imageviewer
-user/bin/sysmon/sysmon.elf      /apps/sysmon/sysmon
-user/bin/netman/netman.elf      /apps/netman/netman
 
 # Coreutils
 user/bin/ls/ls.elf              /bin/ls
@@ -149,10 +130,6 @@ user/bin/shutdown/shutdown.elf  /bin/shutdown
 user/bin/reboot/reboot.elf      /bin/reboot
 user/bin/aegisctl/aegisctl.elf  /bin/aegisctl
 user/bin/rune                   /bin/rune
-
-# Diagnostic — exercises lumen_connect + window_create end-to-end.
-# Used by tests/tests/lumen_connect_probe_test.rs.
-user/bin/lumen-probe/lumen-probe.elf  /bin/lumen-probe
 
 # The Ladybird-engine browser bundle (/lib/ladybird) is NOT baked into the base
 # image — it ships in the signed herald package "lantern" (engine .so closure +

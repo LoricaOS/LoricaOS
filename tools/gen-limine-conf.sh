@@ -45,6 +45,18 @@ case "$mode" in
         TIMEOUT=3
         LIVE_ARG=" aegis_live=1"
         ;;
+    server)
+        # Server live ISO: text console only (no compositor to boot into).
+        WITH_MODULES=1
+        TIMEOUT=3
+        LIVE_ARG=" aegis_live=1"
+        ;;
+    server-installed)
+        # Installed server: text console only, boots ext2 root from disk.
+        WITH_MODULES=0
+        TIMEOUT=3
+        LIVE_ARG=""
+        ;;
     test|installer-test|dltest|perfbench|selftest)
         WITH_MODULES=1
         TIMEOUT=0
@@ -94,5 +106,8 @@ case "$mode" in
         ;;
     selftest)
         emit_entry "AspisOS (selftest)" "boot=text quiet selftest$LIVE_ARG"
+        ;;
+    server|server-installed)
+        emit_entry "AspisOS Server" "boot=text quiet$LIVE_ARG"
         ;;
 esac
