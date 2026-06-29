@@ -336,13 +336,17 @@ SKELETON_FILES_DESKTOP := $(shell find rootfs-desktop -type f 2>/dev/null)
 $(ROOTFS_SERVER): $(MANIFEST_SRCS_BASE) $(SKELETON_FILES_BASE)
 	AEGIS_PROFILE=server bash tools/build-rootfs.sh $@
 
-# Per-component desktop packages + the herald db the desktop image pre-seeds so
-# `herald list` shows the graphical stack as installed (tools/build-component-pkgs.sh).
-$(BUILD)/pkgs/herald-db: $(MANIFEST_SRCS_DESKTOP) $(SKELETON_FILES_DESKTOP) $(BUILD)/logo.raw $(BUILD)/claude.raw tools/build-component-pkgs.sh
-	bash tools/build-component-pkgs.sh
+# The desktop rootfs is ASSEMBLED from fetched component packages (the released
+# .hpkgs of the per-component AspisOS repos), not compiled from in-tree graphical
+# source. fetch-components downloads + unpacks them into an overlay + emits the
+# herald db; make-desktop-meta adds the `desktop` meta-package; assemble layers
+# the overlay + the in-tree gui-installer + the db onto the server base.
+$(BUILD)/desktop-overlay.db: tools/components.list tools/fetch-components.sh tools/make-desktop-meta.sh
+	bash tools/fetch-components.sh
+	bash tools/make-desktop-meta.sh
 
-$(ROOTFS_DESKTOP): $(MANIFEST_SRCS_BASE) $(MANIFEST_SRCS_DESKTOP) $(SKELETON_FILES_BASE) $(SKELETON_FILES_DESKTOP) $(BUILD)/logo.raw $(BUILD)/claude.raw $(BUILD)/pkgs/herald-db
-	AEGIS_PROFILE=desktop bash tools/build-rootfs.sh $@ "" $(BUILD)/logo.raw $(BUILD)/claude.raw
+$(ROOTFS_DESKTOP): $(ROOTFS_SERVER) $(BUILD)/desktop-overlay.db user/bin/gui-installer/gui-installer.elf tools/assemble-desktop-rootfs.sh
+	bash tools/assemble-desktop-rootfs.sh $@
 
 rootfs: $(ROOTFS_DESKTOP) $(ROOTFS_SERVER)
 

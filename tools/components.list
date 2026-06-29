@@ -1,0 +1,24 @@
+# Desktop component packages AspisOS fetches to assemble the desktop image.
+# One line: <herald-id> <version>. Each is downloaded from
+#   https://github.com/AspisOS/<id>/releases/download/v<version>/<id>.hpkg
+# and unpacked into the desktop rootfs. The `desktop` meta-package (depends on
+# all of these) is generated from this list by tools/make-desktop-meta.sh.
+#
+# gui-installer is NOT here — it is the live-ISO installer, built in-tree and
+# auto-removed on installed systems.
+lumen 1.0.0
+bastion 1.0.0
+citadel-dock 1.0.0
+lumen-applications-menu 1.0.0
+lumen-dbg 1.0.0
+lumen-settings 1.0.0
+lumen-terminal 1.0.0
+lumen-calculator 1.0.0
+lumen-editor 1.0.0
+lumen-filemanager 1.0.0
+lumen-run 1.0.0
+lumen-tunes 1.0.0
+lumen-calendar 1.0.0
+lumen-imageviewer 1.0.0
+lumen-sysmon 1.0.0
+lumen-netman 1.0.0
