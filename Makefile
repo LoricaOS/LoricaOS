@@ -230,17 +230,9 @@ $(ESP_SERVER): $(LIMINE_DIR)/BOOTX64.EFI $(LIMINE_DIR)/BOOTIA32.EFI $(KERNEL_STR
 	$(call ESP_RULE,$@,server-installed)
 
 # ── Wallpaper / logo conversion ──���───────────────────────────────────────────
-$(BUILD)/logo.raw: tools/aegis-logo.png
-	@mkdir -p $(BUILD)
-	@if command -v python3 >/dev/null 2>&1 && [ -f tools/convert-logo.py ]; then \
-	    python3 tools/convert-logo.py $< $@; \
-	else touch $@; fi
-
-$(BUILD)/claude.raw: assets/claude-white.png
-	@mkdir -p $(BUILD)
-	@if command -v python3 >/dev/null 2>&1 && [ -f tools/convert-logo.py ]; then \
-	    python3 tools/convert-logo.py $< $@; \
-	else touch $@; fi
+# Logo + Claude raster assets now ship with the lumen compositor package
+# (AspisOS/lumen: assets/logo.raw + claude.raw); the desktop image fetches them,
+# so there is no logo-conversion step in this build.
 
 # (No wallpaper.raw: the default desktop is a compositor-drawn gradient with
 # the Aegis logo centered. Drop a wallpaper.raw into /usr/share to override.)

@@ -1,4 +1,4 @@
-PS1='root@aegis:${PWD:-/}# '
+PS1='root@aspisos:${PWD:-/}# '
 export PS1
 PATH=/bin
 export PATH

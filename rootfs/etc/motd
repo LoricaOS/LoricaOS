@@ -1,9 +1,5 @@
 
- _______ _______  ______ _____ _______
- |_____| |______ |  ____   |   |______
- |     | |______ |_____| __|__ ______|
-
- Aegis __AEGIS_VERSION__ "Ambient Argus"
+ AspisOS __AEGIS_VERSION__
 
  This is v1 software -- a first public release, not
  production-hardened. The C kernel likely contains real,
@@ -11,5 +7,4 @@
  networks or with real secrets.
 
  A gradual Rust migration is underway. Contributions welcome
- at https://github.com/exec/aegis
-
+ at https://github.com/AspisOS/AspisOS

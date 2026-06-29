@@ -84,25 +84,25 @@ printf 'timeout: %s\n\n' "$TIMEOUT"
 
 case "$mode" in
     live|installed)
-        emit_entry "Aegis (graphical)" "boot=graphical quiet$LIVE_ARG"
-        emit_entry "Aegis (text)"      "boot=text quiet$LIVE_ARG"
-        emit_entry "Aegis (debug)"     "boot=text$LIVE_ARG"
+        emit_entry "AspisOS (graphical)" "boot=graphical quiet$LIVE_ARG"
+        emit_entry "AspisOS (text)"      "boot=text quiet$LIVE_ARG"
+        emit_entry "AspisOS (debug)"     "boot=text$LIVE_ARG"
         # Graphical boot with the greeter input-diagnostics line enabled
         # (greeter_diag). Off by default so production greeters are clean;
         # selectable here for serial-less "is the keyboard alive?" triage.
-        emit_entry "Aegis (input diagnostics)" "boot=graphical greeter_diag$LIVE_ARG"
+        emit_entry "AspisOS (input diagnostics)" "boot=graphical greeter_diag$LIVE_ARG"
         ;;
     test)
-        emit_entry "Aegis (test)" "boot=text quiet$LIVE_ARG"
+        emit_entry "AspisOS (test)" "boot=text quiet$LIVE_ARG"
         ;;
     installer-test)
-        emit_entry "Aegis (installer-test)" "boot=graphical quiet bastion_autologin=root$LIVE_ARG"
+        emit_entry "AspisOS (installer-test)" "boot=graphical quiet bastion_autologin=root$LIVE_ARG"
         ;;
     dltest)
-        emit_entry "Aegis (dltest)" "boot=text quiet dltest$LIVE_ARG"
+        emit_entry "AspisOS (dltest)" "boot=text quiet dltest$LIVE_ARG"
         ;;
     perfbench)
-        emit_entry "Aegis (perfbench)" "boot=text quiet perfbench_ipc perfbench_fs$LIVE_ARG"
+        emit_entry "AspisOS (perfbench)" "boot=text quiet perfbench_ipc perfbench_fs$LIVE_ARG"
         ;;
     selftest)
         emit_entry "AspisOS (selftest)" "boot=text quiet selftest$LIVE_ARG"

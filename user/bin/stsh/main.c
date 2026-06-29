@@ -1,7 +1,7 @@
 #include "stsh.h"
 
 /*
- * build_prompt — format "user@aegis:path$ " or "user@aegis:path# ".
+ * build_prompt — format "user@aspisos:path$ " or "user@aspisos:path# ".
  * Replaces HOME prefix with ~.
  */
 static void
@@ -30,9 +30,9 @@ build_prompt(char *prompt, int len)
         /* Elevated session: red prompt + a clear [admin] marker so it's obvious
          * the shell can mutate the system (mirrors the Lumen red admin chrome). */
         snprintf(prompt, len,
-                 "\033[1;31m[admin] %s@aegis:%s#\033[0m ", user, display_path);
+                 "\033[1;31m[admin] %s@aspisos:%s#\033[0m ", user, display_path);
     } else {
-        snprintf(prompt, len, "%s@aegis:%s%c ", user, display_path, suffix);
+        snprintf(prompt, len, "%s@aspisos:%s%c ", user, display_path, suffix);
     }
 }
 
