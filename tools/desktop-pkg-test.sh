@@ -121,4 +121,22 @@ else
     fail "Part B: herald install of the desktop package failed (see transcript above)"
 fi
 
-echo "[desktop-pkg-test] ALL PASS — desktop package installs and yields a greeter"
+# ── Part C: `herald list` parity (desktop shows the stack, server shows none) ─
+echo "[desktop-pkg-test] Part C: herald list parity desktop vs server"
+# Desktop must list the whole peeled stack; boot the desktop rootfs in TEXT mode
+# (gen-limine 'test' = boot=text) so there's a login shell to run herald list.
+build_iso "$B/aegis-desktop-text.iso" "$B/desktop-text-isodir" test "$ROOTFS_DESKTOP" "$ESP_DESKTOP"
+DESK_MUST="lumen,bastion,citadel-dock,applications,settings,terminal,calculator,netman,desktop"
+if python3 tools/herald-list-driver.py "$B/aegis-desktop-text.iso" "$DESK_MUST" "no packages installed" "desktop +1\.0\.0"; then
+    echo "[desktop-pkg-test] Part C/desktop PASS: herald list shows the full graphical stack"
+else
+    fail "Part C/desktop: herald list did not show the peeled packages"
+fi
+# Server must list nothing (no graphical packages seeded).
+if python3 tools/herald-list-driver.py "$B/aegis-server.iso" "no packages installed" "lumen,bastion,desktop" "no packages installed"; then
+    echo "[desktop-pkg-test] Part C/server PASS: herald list is empty on the server"
+else
+    fail "Part C/server: server herald list was not empty"
+fi
+
+echo "[desktop-pkg-test] ALL PASS — desktop installs, yields a greeter, and lists its packages; server stays clean"
