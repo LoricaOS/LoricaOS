@@ -11,7 +11,7 @@ hist_path(char *buf, int buflen)
 {
     const char *home = env_get("HOME");
     if (!home || !home[0])
-        home = "/root";
+        home = "/";
     snprintf(buf, buflen, "%s/.stsh_history", home);
 }
 

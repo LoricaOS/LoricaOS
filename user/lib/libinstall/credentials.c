@@ -78,34 +78,37 @@ int install_hash_password(const char *password, char *out, int outsz)
 
 /* ── Public: install_write_credentials ──────────────────────────────── */
 
-int install_write_credentials(const char *root_hash,
-                              const char *username,
+/* Write the account files for the installed system's single primary user.
+ *
+ * AspisOS has no "root". uid 0 is simply the FIRST assigned uid and carries no
+ * kernel power — authority comes only from capabilities, never from being uid 0
+ * (the kernel even makes an authenticated admin session re-prove itself). So the
+ * person installing the system IS uid 0; there is no separate superuser account
+ * and no 1000+ convention. Additional users a distro adds can start at uid 1.
+ *
+ * The chosen password is also written as the admin-elevation credential
+ * (/etc/aegis/admin), so the user gains admin capabilities by re-typing their
+ * own password (sudo-style) rather than knowing a second secret. */
+int install_write_credentials(const char *username,
                               const char *user_hash)
 {
-    if (!root_hash)
+    if (!username || !username[0] || !user_hash || !user_hash[0])
         return -1;
-
-    int have_user = (username && username[0] && user_hash && user_hash[0]);
 
     /* Refuse a malformed username rather than corrupt the account files. */
-    if (have_user && !install_username_valid(username))
+    if (!install_username_valid(username))
         return -1;
 
-    /* /etc/passwd */
+    /* /etc/passwd — primary user, uid 0, home /home/<user>. */
     {
         int fd = open("/etc/passwd", O_WRONLY | O_CREAT | O_TRUNC);
         if (fd < 0)
             return -1;
         char line[256];
         int n = snprintf(line, sizeof(line),
-                         "root:x:0:0:root:/root:/bin/stsh\n");
-        if (write(fd, line, (size_t)n) != n) { close(fd); return -1; }
-        if (have_user) {
-            n = snprintf(line, sizeof(line),
-                         "%s:x:1000:1000:%s:/home/%s:/bin/stsh\n",
+                         "%s:x:0:0:%s:/home/%s:/bin/stsh\n",
                          username, username, username);
-            if (write(fd, line, (size_t)n) != n) { close(fd); return -1; }
-        }
+        if (write(fd, line, (size_t)n) != n) { close(fd); return -1; }
         close(fd);
     }
 
@@ -116,55 +119,54 @@ int install_write_credentials(const char *root_hash,
             return -1;
         char line[512];
         int n = snprintf(line, sizeof(line),
-                         "root:%s:19814:0:99999:7:::\n", root_hash);
-        if (write(fd, line, (size_t)n) != n) { close(fd); return -1; }
-        if (have_user) {
-            n = snprintf(line, sizeof(line),
                          "%s:%s:19814:0:99999:7:::\n", username, user_hash);
-            if (write(fd, line, (size_t)n) != n) { close(fd); return -1; }
-        }
+        if (write(fd, line, (size_t)n) != n) { close(fd); return -1; }
         close(fd);
     }
 
-    /* /etc/group */
+    /* /etc/group — primary group gid 0; the user is also in wheel. */
     {
         int fd = open("/etc/group", O_WRONLY | O_CREAT | O_TRUNC);
         if (fd < 0)
             return -1;
         char line[256];
-        int n;
-        if (have_user) {
-            n = snprintf(line, sizeof(line),
-                         "root:x:0:root\nwheel:x:999:root,%s\n"
-                         "%s:x:1000:%s\n",
+        int n = snprintf(line, sizeof(line),
+                         "%s:x:0:%s\nwheel:x:999:%s\n",
                          username, username, username);
-        } else {
-            n = snprintf(line, sizeof(line),
-                         "root:x:0:root\nwheel:x:999:root\n");
-        }
         if (write(fd, line, (size_t)n) != n) { close(fd); return -1; }
         close(fd);
     }
 
-    /* Lock down /etc/shadow (0600); passwd/group stay world-readable.
-     * The kernel ignores open()'s mode arg (the VFS hardcodes 0644 on
-     * O_CREAT), so set the modes explicitly. This is defence-in-depth
-     * behind the kernel's CAP_KIND_AUTH gate on shadow reads. Runs before
-     * the pre-copy sync() so the new inode modes reach the installed disk. */
+    /* /etc/aegis/admin — admin-elevation credential = the user's own hash, so
+     * `login -elevate` re-authenticates with the password they just chose. */
+    {
+        int fd = open("/etc/aegis/admin", O_WRONLY | O_CREAT | O_TRUNC);
+        if (fd < 0)
+            return -1;
+        char line[256];
+        int n = snprintf(line, sizeof(line), "%s\n", user_hash);
+        if (write(fd, line, (size_t)n) != n) { close(fd); return -1; }
+        close(fd);
+    }
+
+    /* Lock down /etc/shadow + the admin credential (0600); passwd/group stay
+     * world-readable. The kernel ignores open()'s mode arg (the VFS hardcodes
+     * 0644 on O_CREAT), so set the modes explicitly. Runs before the pre-copy
+     * sync() so the new inode modes reach the installed disk. */
     chmod("/etc/shadow", 0600);
     chmod("/etc/passwd", 0644);
     chmod("/etc/group", 0644);
+    chmod("/etc/aegis/admin", 0600);
 
-    /* Home directory for the optional user account. The passwd line points
-     * at /home/<username>; without this the new user logs into a missing
-     * directory and anything writing to $HOME fails with ENOENT. Created on
-     * the live rootfs so the pre-copy sync() flushes it to ramdisk0. */
-    if (have_user) {
+    /* Home directory for the primary user (owned by uid 0). The passwd line
+     * points at /home/<username>; without this the user logs into a missing
+     * directory and anything writing to $HOME fails with ENOENT. */
+    {
         char home[80];
         mkdir("/home", 0755);                       /* may already exist */
         snprintf(home, sizeof(home), "/home/%s", username);
         mkdir(home, 0755);
-        chown(home, 1000, 1000);
+        chown(home, 0, 0);
     }
 
     return 0;

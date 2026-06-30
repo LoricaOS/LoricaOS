@@ -57,21 +57,19 @@ typedef struct {
     int              ndisks;
     int              selected_disk;
 
-    /* Credentials */
-    char root_pw[64];
-    char root_pw_confirm[64];
+    /* Credentials — the single primary user (uid 0; AspisOS has no root). */
     char username[64];
     char user_pw[64];
     char user_pw_confirm[64];
     char validation_error[128];
 
-    /* Hashes (computed at confirm time) */
-    char root_hash[256];
+    /* Hash (computed at confirm time). Also written as the admin-elevation
+     * credential, so the user elevates with their own password. */
     char user_hash[256];
 
-    /* Admin authorization (Confirm screen): the separate admin credential
-     * verified by `login -elevate` so the kernel grants DISK_ADMIN for the
-     * raw disk write. Distinct from the root/user account passwords above. */
+    /* Admin authorization (Confirm screen): the LIVE system's admin credential
+     * verified by `login -elevate` so the kernel grants DISK_ADMIN for the raw
+     * disk write. Distinct from the account password being set above. */
     char admin_pw[64];
 
     /* Progress (Screen 5) */
@@ -88,8 +86,7 @@ static wizard_state_t g_st;
  * so we don't re-run it on redraws. */
 static int s_install_started = 0;
 
-/* Screen 3 focus state. 0=root_pw, 1=root_confirm, 2=username,
- * 3=user_pw, 4=user_confirm, 5=next-button. */
+/* Screen 3 focus state. 0=username, 1=password, 2=confirm, 3=next-button. */
 static int s_user_focus = 0;
 
 /* ── Signal handling ────────────────────────────────────────────────── */
@@ -316,43 +313,34 @@ static int user_fields_inited = 0;
 static void screen_user_init_fields(void)
 {
     if (user_fields_inited) return;
-    user_fields[0] = (user_field_t){ "Root password",         g_st.root_pw,         sizeof(g_st.root_pw),         1 };
-    user_fields[1] = (user_field_t){ "Confirm root password", g_st.root_pw_confirm, sizeof(g_st.root_pw_confirm), 1 };
-    user_fields[2] = (user_field_t){ "Username (optional)",   g_st.username,        sizeof(g_st.username),        0 };
-    user_fields[3] = (user_field_t){ "User password",         g_st.user_pw,         sizeof(g_st.user_pw),         1 };
-    user_fields[4] = (user_field_t){ "Confirm user password", g_st.user_pw_confirm, sizeof(g_st.user_pw_confirm), 1 };
+    user_fields[0] = (user_field_t){ "Username",         g_st.username,        sizeof(g_st.username),        0 };
+    user_fields[1] = (user_field_t){ "Password",         g_st.user_pw,         sizeof(g_st.user_pw),         1 };
+    user_fields[2] = (user_field_t){ "Confirm password", g_st.user_pw_confirm, sizeof(g_st.user_pw_confirm), 1 };
     user_fields_inited = 1;
 }
 
 static int screen_user_validate(void)
 {
     g_st.validation_error[0] = '\0';
-    if (g_st.root_pw[0] == '\0') {
+    if (g_st.username[0] == '\0') {
         snprintf(g_st.validation_error, sizeof(g_st.validation_error),
-                 "Root password cannot be empty.");
+                 "Username cannot be empty.");
         return -1;
     }
-    if (strcmp(g_st.root_pw, g_st.root_pw_confirm) != 0) {
+    if (!install_username_valid(g_st.username)) {
         snprintf(g_st.validation_error, sizeof(g_st.validation_error),
-                 "Root passwords do not match.");
+                 "Username: a-z, 0-9, _ or - (max 31, start a-z/_).");
         return -1;
     }
-    if (g_st.username[0] != '\0') {
-        if (!install_username_valid(g_st.username)) {
-            snprintf(g_st.validation_error, sizeof(g_st.validation_error),
-                     "Username: a-z, 0-9, _ or - (max 31, start a-z/_).");
-            return -1;
-        }
-        if (g_st.user_pw[0] == '\0') {
-            snprintf(g_st.validation_error, sizeof(g_st.validation_error),
-                     "User password cannot be empty.");
-            return -1;
-        }
-        if (strcmp(g_st.user_pw, g_st.user_pw_confirm) != 0) {
-            snprintf(g_st.validation_error, sizeof(g_st.validation_error),
-                     "User passwords do not match.");
-            return -1;
-        }
+    if (g_st.user_pw[0] == '\0') {
+        snprintf(g_st.validation_error, sizeof(g_st.validation_error),
+                 "Password cannot be empty.");
+        return -1;
+    }
+    if (strcmp(g_st.user_pw, g_st.user_pw_confirm) != 0) {
+        snprintf(g_st.validation_error, sizeof(g_st.validation_error),
+                 "Passwords do not match.");
+        return -1;
     }
     return 0;
 }
@@ -371,7 +359,7 @@ static void draw_screen_user(void)
     int field_h = 32;
     int gap     = 16;
 
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 3; i++) {
         int y = fy + i * (field_h + gap + 18);
         draw_text14(fx, y, user_fields[i].label, 0x00A0A0B0);
         draw_fill_rect(&g_st.surf, fx, y + 18, field_w, field_h, 0x002A2A3E);
@@ -394,7 +382,7 @@ static void draw_screen_user(void)
     /* Back + Next buttons */
     draw_button(cx - 160, g_st.fb_h - 120, 100, 40, "Back", 0);
     draw_button(cx + 60, g_st.fb_h - 120, 100, 40, "Next",
-                (s_user_focus == 5));
+                (s_user_focus == 3));
 
     /* Validation error message */
     if (g_st.validation_error[0]) {
@@ -433,11 +421,7 @@ static void draw_screen_confirm(void)
     }
     y += 30;
 
-    draw_text14(lx, y, "Root password:", 0x00A0A0B0);
-    draw_text14(lx + 180, y, "set", 0x00FFFFFF);
-    y += 30;
-
-    draw_text14(lx, y, "User account:", 0x00A0A0B0);
+    draw_text14(lx, y, "Account (uid 0):", 0x00A0A0B0);
     draw_text14(lx + 180, y,
                 g_st.username[0] ? g_st.username : "(none)",
                 0x00FFFFFF);
@@ -507,26 +491,15 @@ static void run_install(void)
     if (s_install_started) return;
     s_install_started = 1;
 
-    /* Hash passwords */
-    if (install_hash_password(g_st.root_pw,
-                              g_st.root_hash,
-                              sizeof(g_st.root_hash)) < 0) {
+    /* Hash the account password (also becomes the admin-elevation credential). */
+    if (install_hash_password(g_st.user_pw,
+                              g_st.user_hash,
+                              sizeof(g_st.user_hash)) < 0) {
         snprintf(g_st.progress_error, sizeof(g_st.progress_error),
-                 "failed to hash root password");
+                 "failed to hash password");
         dprintf(2, "[INSTALLER] error=%s\n", g_st.progress_error);
         g_st.install_failed = 1;
         return;
-    }
-    if (g_st.username[0]) {
-        if (install_hash_password(g_st.user_pw,
-                                  g_st.user_hash,
-                                  sizeof(g_st.user_hash)) < 0) {
-            snprintf(g_st.progress_error, sizeof(g_st.progress_error),
-                     "failed to hash user password");
-            dprintf(2, "[INSTALLER] error=%s\n", g_st.progress_error);
-            g_st.install_failed = 1;
-            return;
-        }
     }
 
     install_progress_t p = {
@@ -540,9 +513,8 @@ static void run_install(void)
         g_st.disks[g_st.selected_disk].name,
         g_st.disks[g_st.selected_disk].block_count,
         g_st.disks[g_st.selected_disk].block_size,
-        g_st.root_hash,
-        g_st.username[0] ? g_st.username     : NULL,
-        g_st.username[0] ? g_st.user_hash    : NULL,
+        g_st.username,
+        g_st.user_hash,
         &p);
 
     if (rc == 0) {
@@ -686,13 +658,13 @@ static void handle_key_user(char c)
     screen_user_init_fields();
 
     if (c == '\t') {
-        /* Tab cycles focus 0..5 */
-        s_user_focus = (s_user_focus + 1) % 6;
+        /* Tab cycles focus 0..3 (username, password, confirm, Next) */
+        s_user_focus = (s_user_focus + 1) % 4;
         g_st.dirty = 1;
         return;
     }
     if (c == '\n' || c == '\r') {
-        if (s_user_focus < 5) {
+        if (s_user_focus < 3) {
             s_user_focus++;
             g_st.dirty = 1;
             return;
@@ -706,7 +678,7 @@ static void handle_key_user(char c)
         g_st.dirty = 1;
         return;
     }
-    if (s_user_focus >= 5) return;
+    if (s_user_focus >= 3) return;
 
     user_field_t *f = &user_fields[s_user_focus];
     int len = (int)strlen(f->buf);

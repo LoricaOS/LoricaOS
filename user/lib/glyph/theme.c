@@ -292,7 +292,7 @@ user_config_path(char *out, size_t outsz)
 {
     const char *home = getenv("HOME");
     if (!home || !home[0])
-        home = "/root";
+        home = "/";
     snprintf(out, outsz, "%s/.config/aegis/theme.conf", home);
 }
 
@@ -313,7 +313,7 @@ glyph_theme_save(void)
 {
     const char *home = getenv("HOME");
     if (!home || !home[0])
-        home = "/root";
+        home = "/";
     char dir[256];
     snprintf(dir, sizeof(dir), "%s/.config", home);
     mkdir(dir, 0755);
