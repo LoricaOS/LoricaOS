@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# AspisOS boot test.
+# LoricaOS boot test.
 #
 # Boots the live ISO headless in QEMU. Success = the kernel comes up, mounts the
 # root filesystem, execs init (/bin/vigil), and the userland brings the display
 # stack all the way to the login greeter ("[BASTION] greeter ready"). That single
 # line exercises kernel + init-from-rootfs + services + Lumen + Bastion.
 set -u
-ISO="${1:?usage: ostest.sh <aspisos-desktop.iso>}"
+ISO="${1:?usage: ostest.sh <loricaos-desktop.iso>}"
 LOG="$(mktemp)"
 MARKER="[BASTION] greeter ready"
 
@@ -15,7 +15,7 @@ timeout 150 qemu-system-x86_64 -machine pc -cdrom "$ISO" -boot order=d \
     > "$LOG" 2>&1 || true
 
 if grep -qF "$MARKER" "$LOG"; then
-    echo "[ostest] PASS: AspisOS booted to the greeter"
+    echo "[ostest] PASS: LoricaOS booted to the greeter"
     rm -f "$LOG"
     exit 0
 fi

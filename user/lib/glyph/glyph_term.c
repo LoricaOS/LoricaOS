@@ -872,7 +872,7 @@ spawn_shell(int slave_fd)
     char *argv[] = {"-stsh", NULL};  /* leading '-' = login shell */
 
     /* Inherit the session's identity rather than hardcoding root: USER/HOME
-     * come from the environment the desktop was logged into. AspisOS has no
+     * come from the environment the desktop was logged into. LoricaOS has no
      * "root" user — uid 0 just carries the name the person chose at install. */
     const char *user = getenv("USER");
     const char *home = getenv("HOME");

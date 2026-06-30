@@ -84,40 +84,40 @@ printf 'timeout: %s\n\n' "$TIMEOUT"
 
 case "$mode" in
     live|installed)
-        emit_entry "AspisOS (graphical)" "boot=graphical quiet$LIVE_ARG"
-        emit_entry "AspisOS (text)"      "boot=text quiet$LIVE_ARG"
-        emit_entry "AspisOS (debug)"     "boot=text$LIVE_ARG"
+        emit_entry "LoricaOS (graphical)" "boot=graphical quiet$LIVE_ARG"
+        emit_entry "LoricaOS (text)"      "boot=text quiet$LIVE_ARG"
+        emit_entry "LoricaOS (debug)"     "boot=text$LIVE_ARG"
         # Graphical boot with the greeter input-diagnostics line enabled
         # (greeter_diag). Off by default so production greeters are clean;
         # selectable here for serial-less "is the keyboard alive?" triage.
-        emit_entry "AspisOS (input diagnostics)" "boot=graphical greeter_diag$LIVE_ARG"
+        emit_entry "LoricaOS (input diagnostics)" "boot=graphical greeter_diag$LIVE_ARG"
         ;;
     test)
-        emit_entry "AspisOS (test)" "boot=text quiet$LIVE_ARG"
+        emit_entry "LoricaOS (test)" "boot=text quiet$LIVE_ARG"
         ;;
     installer-test)
-        emit_entry "AspisOS (installer-test)" "boot=graphical quiet bastion_autologin=root$LIVE_ARG"
+        emit_entry "LoricaOS (installer-test)" "boot=graphical quiet bastion_autologin=root$LIVE_ARG"
         ;;
     dltest)
-        emit_entry "AspisOS (dltest)" "boot=text quiet dltest$LIVE_ARG"
+        emit_entry "LoricaOS (dltest)" "boot=text quiet dltest$LIVE_ARG"
         ;;
     perfbench)
-        emit_entry "AspisOS (perfbench)" "boot=text quiet perfbench_ipc perfbench_fs$LIVE_ARG"
+        emit_entry "LoricaOS (perfbench)" "boot=text quiet perfbench_ipc perfbench_fs$LIVE_ARG"
         ;;
     selftest)
-        emit_entry "AspisOS (selftest)" "boot=text quiet selftest$LIVE_ARG"
+        emit_entry "LoricaOS (selftest)" "boot=text quiet selftest$LIVE_ARG"
         ;;
     infer)
         # No explicit boot= — exercises vigil's mode inference (graphical iff
         # the compositor is installed). Used by the desktop-package test to
         # prove a box with the graphical stack present comes up to the greeter
         # exactly as it would on the reboot after `herald install desktop`.
-        emit_entry "AspisOS (infer)" "quiet$LIVE_ARG"
+        emit_entry "LoricaOS (infer)" "quiet$LIVE_ARG"
         ;;
     server)
         # Live server ISO: explicit text console — this is the installer
         # environment and has no compositor to boot into.
-        emit_entry "AspisOS Server" "boot=text quiet$LIVE_ARG"
+        emit_entry "LoricaOS Server" "boot=text quiet$LIVE_ARG"
         ;;
     server-installed)
         # Installed server: deliberately NO explicit boot= mode. vigil then
@@ -125,6 +125,6 @@ case "$mode" in
         # server has no compositor and comes up to a text login, but after
         # `herald install desktop` lands /bin/bastion the next boot brings up
         # the greeter, with no bootloader edit. (LIVE_ARG is empty here.)
-        emit_entry "AspisOS Server" "quiet$LIVE_ARG"
+        emit_entry "LoricaOS Server" "quiet$LIVE_ARG"
         ;;
 esac

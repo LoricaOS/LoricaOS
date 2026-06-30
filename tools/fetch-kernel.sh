@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Fetch the Aegis kernel image AspisOS is built against.
+# Fetch the Aegis kernel image LoricaOS is built against.
 #
 # Resolution order:
 #   1. local cache  vendor/aegis-<version>.elf   (committed or pre-populated)
 #   2. download     <release URL>/v<version>/aegis.elf
 #
-# The kernel is a versioned ARTIFACT — AspisOS does not build it. OS and kernel
+# The kernel is a versioned ARTIFACT — LoricaOS does not build it. OS and kernel
 # versions move independently; this is the single point that couples them.
 set -eu
 
@@ -13,7 +13,7 @@ VER="${1:?usage: fetch-kernel.sh <version> <dest-path>}"
 DEST="${2:?usage: fetch-kernel.sh <version> <dest-path>}"
 
 CACHE="vendor/aegis-${VER}.elf"
-URL="https://github.com/AspisOS/Aegis/releases/download/v${VER}/aegis.elf"
+URL="https://github.com/LoricaOS/Aegis/releases/download/v${VER}/aegis.elf"
 
 mkdir -p vendor "$(dirname "$DEST")"
 

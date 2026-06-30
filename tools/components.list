@@ -1,6 +1,6 @@
-# Desktop component packages AspisOS fetches to assemble the desktop image.
+# Desktop component packages LoricaOS fetches to assemble the desktop image.
 # One line: <herald-id> <version>. Each is downloaded from
-#   https://github.com/AspisOS/<id>/releases/download/v<version>/<id>.hpkg
+#   https://github.com/LoricaOS/<id>/releases/download/v<version>/<id>.hpkg
 # and unpacked into the desktop rootfs. The `desktop` meta-package (depends on
 # all of these) is generated from this list by tools/make-desktop-meta.sh.
 #

@@ -80,7 +80,7 @@ int install_hash_password(const char *password, char *out, int outsz)
 
 /* Write the account files for the installed system's single primary user.
  *
- * AspisOS has no "root". uid 0 is simply the FIRST assigned uid and carries no
+ * LoricaOS has no "root". uid 0 is simply the FIRST assigned uid and carries no
  * kernel power — authority comes only from capabilities, never from being uid 0
  * (the kernel even makes an authenticated admin session re-prove itself). So the
  * person installing the system IS uid 0; there is no separate superuser account

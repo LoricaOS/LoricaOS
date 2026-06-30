@@ -261,8 +261,8 @@ main(void)
 
     /* Set the OS hostname (the kernel default is the generic "aegis"). The OS
      * owns its own identity, so init sets it here — uname()/Settings/the shell
-     * prompt all then report "aspisos". */
-    sethostname("aspisos", 7);
+     * prompt all then report "loricaos". */
+    sethostname("loricaos", 7);
 
     /* Detect boot mode + quiet flag from kernel command line BEFORE any output */
     {

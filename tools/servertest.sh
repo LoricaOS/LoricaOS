@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# AspisOS server-ISO boot test.
+# LoricaOS server-ISO boot test.
 #
 # Boots the server ISO headless. Success = the system comes up text-only to the
 # console login prompt ("login:") — kernel + init-from-rootfs + vigil + getty +
@@ -7,7 +7,7 @@
 # never appear on serial (they aren't in the server image at all), so the build
 # really is graphical-free.
 set -u
-ISO="${1:?usage: servertest.sh <aspisos-server.iso>}"
+ISO="${1:?usage: servertest.sh <loricaos-server.iso>}"
 LOG="$(mktemp)"
 
 timeout 120 qemu-system-x86_64 -machine pc -cdrom "$ISO" -boot order=d \

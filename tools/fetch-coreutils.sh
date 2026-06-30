@@ -1,6 +1,6 @@
 #!/bin/sh
 # fetch-coreutils.sh — download the pinned coreutils.hpkg artifact (built by the
-# AspisOS/coreutils repo's CI) and unpack its /bin payload into
+# LoricaOS/coreutils repo's CI) and unpack its /bin payload into
 # vendor/coreutils/bin/ for the base rootfs build. Mirrors fetch-kernel.sh /
 # fetch-components.sh: a versioned, signature-trusted fetched dependency.
 set -eu
@@ -9,7 +9,7 @@ cd "$(dirname "$0")/.."
 VER="$(cat COREUTILS_VERSION)"
 DEST=vendor/coreutils
 CACHE="$DEST/coreutils-$VER.hpkg"
-URL="https://github.com/AspisOS/coreutils/releases/download/v$VER/coreutils.hpkg"
+URL="https://github.com/LoricaOS/coreutils/releases/download/v$VER/coreutils.hpkg"
 
 mkdir -p "$DEST"
 if [ ! -f "$CACHE" ]; then

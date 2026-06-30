@@ -20,7 +20,7 @@ mkdir -p "$OUT"
 deps="$(grep -vE '^\s*#|^\s*$' "$LIST" | awk '{print $1}' | tr '\n' ' ' | sed 's/ *$//')"
 
 stage="$(mktemp -d)"; trap 'rm -rf "$stage"' EXIT
-printf 'id=desktop\nname=AspisOS Desktop\nversion=%s\nclass=system\ndepends=%s\n' \
+printf 'id=desktop\nname=LoricaOS Desktop\nversion=%s\nclass=system\ndepends=%s\n' \
     "$VERSION" "$deps" > "$stage/manifest"
 hpkg="$OUT/desktop_${VERSION}_x86_64.hpkg"
 ( cd "$stage" && tar --format=ustar -cf "$ROOT/$hpkg" manifest )

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # fetch-components.sh — download the desktop component packages from their
-# AspisOS releases, unpack them into a single overlay tree, and emit the herald
+# LoricaOS releases, unpack them into a single overlay tree, and emit the herald
 # installed-package db the desktop image pre-seeds.
 #
-# This is what makes the aspisos build CONSUME the per-component repos instead of
+# This is what makes the loricaos build CONSUME the per-component repos instead of
 # building the graphical stack from in-tree source. Mirrors fetch-kernel.sh: each
 # package is a pinned, cached, versioned artifact (vendor/components/).
 #
@@ -18,7 +18,7 @@ LIST=tools/components.list
 VENDOR=vendor/components
 OVERLAY=build/desktop-overlay
 DB=build/desktop-overlay.db
-BASE=https://github.com/AspisOS
+BASE=https://github.com/LoricaOS
 
 mkdir -p "$VENDOR" build
 rm -rf "$OVERLAY"; mkdir -p "$OVERLAY"

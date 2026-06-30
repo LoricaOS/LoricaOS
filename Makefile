@@ -1,4 +1,4 @@
-# AspisOS — the operating system built on the Aegis kernel.
+# LoricaOS — the operating system built on the Aegis kernel.
 # Builds the userland, root filesystem, and bootable ISO. The kernel itself is
 # NOT built here: it is fetched as a versioned artifact (see KERNEL_VERSION /
 # tools/fetch-kernel.sh). OS and kernel versions are independent.
@@ -47,7 +47,7 @@ build-musl: $(MUSL_BUILT)
 # Add new programs here — that's it. No other list to update.
 #
 # NOTE: the unprivileged coreutils (ls/cat/cp/grep/ps/find/...) were peeled to
-# the AspisOS/coreutils repo and are fetched as a package — see COREUTILS_VERSION
+# the LoricaOS/coreutils repo and are fetched as a package — see COREUTILS_VERSION
 # + tools/fetch-coreutils.sh. What stays here is the trusted base (init/shell/
 # login/auth/admin/system-control/network) and the in-tree test/stress suite.
 SIMPLE_USER_PROGS = \
@@ -232,7 +232,7 @@ $(ESP_SERVER): $(LIMINE_DIR)/BOOTX64.EFI $(LIMINE_DIR)/BOOTIA32.EFI $(KERNEL_STR
 
 # ── Wallpaper / logo conversion ──���───────────────────────────────────────────
 # Logo + Claude raster assets now ship with the lumen compositor package
-# (AspisOS/lumen: assets/logo.raw + claude.raw); the desktop image fetches them,
+# (LoricaOS/lumen: assets/logo.raw + claude.raw); the desktop image fetches them,
 # so there is no logo-conversion step in this build.
 
 # (No wallpaper.raw: the default desktop is a compositor-drawn gradient with
@@ -263,21 +263,21 @@ define LIMINE_ISO_RULE
 endef
 
 # ── The two production ISOs ─────────────────────────────────────────────────
-$(BUILD)/aspisos-desktop.iso: $(KERNEL_STRIPPED) $(ROOTFS_DESKTOP) $(ESP_DESKTOP) $(LIMINE_BIN) tools/gen-limine-conf.sh
+$(BUILD)/loricaos-desktop.iso: $(KERNEL_STRIPPED) $(ROOTFS_DESKTOP) $(ESP_DESKTOP) $(LIMINE_BIN) tools/gen-limine-conf.sh
 	$(call LIMINE_ISO_RULE,$@,$(BUILD)/desktop-isodir,live,$(ROOTFS_DESKTOP),$(ESP_DESKTOP))
 
-$(BUILD)/aspisos-server.iso: $(KERNEL_STRIPPED) $(ROOTFS_SERVER) $(ESP_SERVER) $(LIMINE_BIN) tools/gen-limine-conf.sh
+$(BUILD)/loricaos-server.iso: $(KERNEL_STRIPPED) $(ROOTFS_SERVER) $(ESP_SERVER) $(LIMINE_BIN) tools/gen-limine-conf.sh
 	$(call LIMINE_ISO_RULE,$@,$(BUILD)/server-isodir,server,$(ROOTFS_SERVER),$(ESP_SERVER))
 
-desktop-iso: $(BUILD)/aspisos-desktop.iso
-server-iso:  $(BUILD)/aspisos-server.iso
+desktop-iso: $(BUILD)/loricaos-desktop.iso
+server-iso:  $(BUILD)/loricaos-server.iso
 iso: desktop-iso server-iso
 
 # Self-test ISO: the desktop image (carries captest), kernel cmdline `selftest`
 # so vigil runs the userland security probe (/bin/selftest -> /bin/captest).
-$(BUILD)/aspisos-test.iso: $(KERNEL_STRIPPED) $(ROOTFS_DESKTOP) $(ESP_DESKTOP) $(LIMINE_BIN) tools/gen-limine-conf.sh
+$(BUILD)/loricaos-test.iso: $(KERNEL_STRIPPED) $(ROOTFS_DESKTOP) $(ESP_DESKTOP) $(LIMINE_BIN) tools/gen-limine-conf.sh
 	$(call LIMINE_ISO_RULE,$@,$(BUILD)/selftest-isodir,selftest,$(ROOTFS_DESKTOP),$(ESP_DESKTOP))
-selftest-iso: $(BUILD)/aspisos-test.iso
+selftest-iso: $(BUILD)/loricaos-test.iso
 
 # Manifest + skeleton sources, per layer. A rootfs rebuilds when any binary it
 # packs OR any skeleton file (cap policies, vigil services, /etc) changes.
@@ -288,7 +288,7 @@ SKELETON_FILES_BASE    := $(shell find rootfs         -type f 2>/dev/null)
 # rootfs is assembled, not built from a manifest, so there is no desktop manifest.
 SKELETON_FILES_DESKTOP := $(shell find rootfs-desktop -type f 2>/dev/null)
 
-# Coreutils are a fetched artifact (AspisOS/coreutils), not built in-tree. The
+# Coreutils are a fetched artifact (LoricaOS/coreutils), not built in-tree. The
 # fetch unpacks coreutils.hpkg's /bin payload into vendor/coreutils/bin/; the
 # rootfs.manifest entries point there, so MANIFEST_SRCS_BASE lists those files as
 # prereqs and this pattern rule satisfies them from the fetch stamp.
@@ -303,7 +303,7 @@ $(ROOTFS_SERVER): $(MANIFEST_SRCS_BASE) $(SKELETON_FILES_BASE)
 	AEGIS_PROFILE=server bash tools/build-rootfs.sh $@
 
 # The desktop rootfs is ASSEMBLED from fetched component packages (the released
-# .hpkgs of the per-component AspisOS repos), not compiled from in-tree graphical
+# .hpkgs of the per-component LoricaOS repos), not compiled from in-tree graphical
 # source. fetch-components downloads + unpacks them into an overlay + emits the
 # herald db; make-desktop-meta adds the `desktop` meta-package; assemble layers
 # the overlay + the in-tree gui-installer + the db onto the server base.
@@ -325,16 +325,16 @@ rootfs: $(ROOTFS_DESKTOP) $(ROOTFS_SERVER)
 # (2) server  ISO  -> text console login ("[SERVERTEST] ...") + NO graphical
 #     binaries present.
 # (3) selftest ISO -> "[CAPTEST] ALL PASS" (userland capability model).
-test: desktop-iso server-iso $(BUILD)/aspisos-test.iso
-	bash tools/ostest.sh $(BUILD)/aspisos-desktop.iso
-	bash tools/servertest.sh $(BUILD)/aspisos-server.iso
-	bash tools/selftest.sh $(BUILD)/aspisos-test.iso
+test: desktop-iso server-iso $(BUILD)/loricaos-test.iso
+	bash tools/ostest.sh $(BUILD)/loricaos-desktop.iso
+	bash tools/servertest.sh $(BUILD)/loricaos-server.iso
+	bash tools/selftest.sh $(BUILD)/loricaos-test.iso
 
 version:
-	@echo "AspisOS $(AEGIS_OS_VERSION) (kernel $(KERNEL_VERSION))"
+	@echo "LoricaOS $(AEGIS_OS_VERSION) (kernel $(KERNEL_VERSION))"
 
 clean:
-	rm -rf $(BUILD)/aspisos-desktop.iso $(BUILD)/aspisos-server.iso $(BUILD)/aspisos-test.iso \
+	rm -rf $(BUILD)/loricaos-desktop.iso $(BUILD)/loricaos-server.iso $(BUILD)/loricaos-test.iso \
 	       $(BUILD)/desktop-isodir $(BUILD)/server-isodir $(BUILD)/selftest-isodir \
 	       $(BUILD)/rootfs-desktop.img $(BUILD)/rootfs-server.img \
 	       $(BUILD)/esp-desktop.img $(BUILD)/esp-server.img \

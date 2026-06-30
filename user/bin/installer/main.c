@@ -1,4 +1,4 @@
-/* user/bin/installer/main.c — AspisOS text-mode installer
+/* user/bin/installer/main.c — LoricaOS text-mode installer
  *
  * Thin UI shell over libinstall.a.  Collects disk choice and
  * credentials from the user via stdin prompts, then hands off to
@@ -111,7 +111,7 @@ static int read_line(const char *prompt, char *buf, int bufsize)
 }
 
 /* collect_credentials — prompt for the primary user account and hash the
- * password. AspisOS has no "root": this user IS uid 0 (the first uid), and the
+ * password. LoricaOS has no "root": this user IS uid 0 (the first uid), and the
  * same password becomes the sudo-style admin-elevation credential. Fills
  * *username and *user_hash. Returns 0 on success, -1 on cancel or mismatch. */
 static int collect_credentials(char *username, int username_sz,
@@ -120,7 +120,7 @@ static int collect_credentials(char *username, int username_sz,
     char pw[64], confirm[64];
 
     printf("\n--- Create your account ---\n");
-    printf("This user is uid 0 — the first user. AspisOS has no separate root;\n");
+    printf("This user is uid 0 — the first user. LoricaOS has no separate root;\n");
     printf("you elevate to admin actions by re-entering this same password.\n");
     if (read_line("Username: ", username, username_sz) == 0) {
         printf("ERROR: username cannot be empty\n");
@@ -160,8 +160,8 @@ int main(void)
     cooked.c_lflag |= (unsigned)(ECHO | ICANON | ISIG);
     tcsetattr(0, TCSANOW, &cooked);
 
-    printf("\n=== AspisOS Installer ===\n\n");
-    printf("This will install AspisOS to your NVMe disk.\n");
+    printf("\n=== LoricaOS Installer ===\n\n");
+    printf("This will install LoricaOS to your NVMe disk.\n");
     printf("WARNING: All data on the disk will be destroyed!\n\n");
 
     /* Raw whole-disk access (listing AND writing disks via sys_blkdev_*)
@@ -210,7 +210,7 @@ int main(void)
                (unsigned long long)devs[i].block_count *
                    devs[i].block_size / (1024 * 1024),
                install_disk_has_aegis(devs[i].name)
-                   ? "  [existing AspisOS install — will be erased]" : "");
+                   ? "  [existing LoricaOS install — will be erased]" : "");
         eligible[neligible++] = i;
     }
     if (neligible == 0) {
@@ -281,6 +281,6 @@ int main(void)
     }
 
     printf("\n=== Installation complete! ===\n");
-    printf("Remove the ISO and reboot to start AspisOS from disk.\n\n");
+    printf("Remove the ISO and reboot to start LoricaOS from disk.\n\n");
     return 0;
 }

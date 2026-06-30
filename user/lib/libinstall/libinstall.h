@@ -97,7 +97,7 @@ int install_username_valid(const char *username);
 
 /* Write /etc/passwd, /etc/shadow, /etc/group and the /etc/aegis/admin
  * elevation credential on the currently mounted rootfs for the single
- * primary user. AspisOS has no "root": that user IS uid 0 (uid 0 is just
+ * primary user. LoricaOS has no "root": that user IS uid 0 (uid 0 is just
  * the first assigned uid and grants no power). Both `username` and
  * `user_hash` are required; the hash is also written as the admin
  * credential (sudo-style elevation with the user's own password). */

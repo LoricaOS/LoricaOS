@@ -1,4 +1,4 @@
-PS1='${USER:-live}@aspisos:${PWD:-/}# '
+PS1='${USER:-live}@loricaos:${PWD:-/}# '
 export PS1
 PATH=/bin
 export PATH
