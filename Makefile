@@ -45,13 +45,14 @@ build-musl: $(MUSL_BUILT)
 
 # Simple user programs: depend only on musl, built by their own Makefile.
 # Add new programs here — that's it. No other list to update.
+#
+# NOTE: the unprivileged coreutils (ls/cat/cp/grep/ps/find/...) were peeled to
+# the AspisOS/coreutils repo and are fetched as a package — see COREUTILS_VERSION
+# + tools/fetch-coreutils.sh. What stays here is the trusted base (init/shell/
+# login/auth/admin/system-control/network) and the in-tree test/stress suite.
 SIMPLE_USER_PROGS = \
-    ls cat echo pwd uname clear true false wc grep sort \
-    mkdir rmdir touch rm cp mv whoami ln chmod chown readlink \
     shutdown reboot aegisctl login stsh httpd sshd nettest polltest poll-test sockreftest contresume spawnleak \
-    sleep head tail basename dirname tee env date hostname sync \
-    tr cut expand realpath stat yes find which uniq \
-    ps kill free uptime du pgrep pkill xargs more diff dmesg df ip \
+    hostname ip \
     smpstress futexstress mmfaultstress elffuzz sysfuzz fduaf blkuaf extabtest vforkstress dltest captest cowtest \
     perfbench-ipc forkbench selftest
 
@@ -286,6 +287,15 @@ SKELETON_FILES_BASE    := $(shell find rootfs         -type f 2>/dev/null)
 # caps.d); the rest of the graphical stack is fetched as packages. The desktop
 # rootfs is assembled, not built from a manifest, so there is no desktop manifest.
 SKELETON_FILES_DESKTOP := $(shell find rootfs-desktop -type f 2>/dev/null)
+
+# Coreutils are a fetched artifact (AspisOS/coreutils), not built in-tree. The
+# fetch unpacks coreutils.hpkg's /bin payload into vendor/coreutils/bin/; the
+# rootfs.manifest entries point there, so MANIFEST_SRCS_BASE lists those files as
+# prereqs and this pattern rule satisfies them from the fetch stamp.
+vendor/coreutils/.fetched: COREUTILS_VERSION tools/fetch-coreutils.sh
+	bash tools/fetch-coreutils.sh
+vendor/coreutils/bin/%: vendor/coreutils/.fetched
+	@test -f '$@' || { echo "coreutils: $@ missing from fetched package" >&2; exit 1; }
 
 # No kernel in the rootfs image: the installed system boots the kernel from the
 # FAT ESP (boot():/boot/aegis.elf) — see the ESP rules above.
