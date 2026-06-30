@@ -1,6 +1,7 @@
 #include <pwd.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 int main(void) {
@@ -9,7 +10,9 @@ int main(void) {
         puts(pw->pw_name);
         return 0;
     }
-    /* fallback if /etc/passwd not readable */
-    write(1, "root\n", 5);
+    /* fallback if /etc/passwd not readable: the login-set $USER, else the uid */
+    const char *u = getenv("USER");
+    if (u && u[0]) { puts(u); return 0; }
+    printf("%u\n", (unsigned)getuid());
     return 0;
 }

@@ -11,12 +11,11 @@ static void report_err(install_progress_t *p, const char *msg)
 
 int install_run_all(const char *devname, uint64_t disk_blocks,
                     uint32_t block_size,
-                    const char *root_hash,
                     const char *username,
                     const char *user_hash,
                     install_progress_t *p)
 {
-    if (!devname || !root_hash) {
+    if (!devname || !username || !user_hash) {
         report_err(p, "invalid arguments to install_run_all");
         return -1;
     }
@@ -40,7 +39,7 @@ int install_run_all(const char *devname, uint64_t disk_blocks,
     /* 3. Write credentials */
     if (p && p->on_step)
         p->on_step("Writing user accounts", p->ctx);
-    if (install_write_credentials(root_hash, username, user_hash) < 0) {
+    if (install_write_credentials(username, user_hash) < 0) {
         report_err(p, "write /etc/passwd failed");
         return -1;
     }

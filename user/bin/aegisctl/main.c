@@ -4,8 +4,8 @@
  *   aegisctl ntp on|off          enable/disable automatic time sync (chronos)
  *
  * These mirror the Settings → Users / Date & Time toggles. The kernel gates
- * the writes on an authenticated root session (POWER cap + auth_uid == 0), so
- * a non-root caller gets EPERM. Useful for scripted / headless setups where
+ * the writes on an authenticated admin session (POWER cap), so an
+ * unprivileged caller gets EPERM. Useful for scripted / headless setups where
  * there is no GUI.
  */
 #include <sys/syscall.h>
@@ -47,7 +47,7 @@ int main(int argc, char **argv)
     }
 
     if (syscall(num, (long)val) < 0) {
-        fprintf(stderr, "aegisctl: %s %s failed (must be root)\n",
+        fprintf(stderr, "aegisctl: %s %s failed (requires an admin session)\n",
                 argv[1], argv[2]);
         return 1;
     }

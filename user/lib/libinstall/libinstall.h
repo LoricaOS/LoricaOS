@@ -95,11 +95,13 @@ int install_hash_password(const char *password, char *out, int outsz);
  * Returns 1 if valid, 0 otherwise. */
 int install_username_valid(const char *username);
 
-/* Write /etc/passwd, /etc/shadow, /etc/group on the currently
- * mounted rootfs.  `username` and `user_hash` may be NULL to skip
- * the optional second user account.  `root_hash` is required. */
-int install_write_credentials(const char *root_hash,
-                              const char *username,
+/* Write /etc/passwd, /etc/shadow, /etc/group and the /etc/aegis/admin
+ * elevation credential on the currently mounted rootfs for the single
+ * primary user. AspisOS has no "root": that user IS uid 0 (uid 0 is just
+ * the first assigned uid and grants no power). Both `username` and
+ * `user_hash` are required; the hash is also written as the admin
+ * credential (sudo-style elevation with the user's own password). */
+int install_write_credentials(const char *username,
                               const char *user_hash);
 
 /* One-shot orchestration driver.  Runs every phase in order using
@@ -121,7 +123,6 @@ int install_write_credentials(const char *root_hash,
  * written disk is left in place (caller may retry or abort). */
 int install_run_all(const char *devname, uint64_t disk_blocks,
                     uint32_t block_size,
-                    const char *root_hash,
                     const char *username,
                     const char *user_hash,
                     install_progress_t *p);

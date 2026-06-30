@@ -870,7 +870,17 @@ static int
 spawn_shell(int slave_fd)
 {
     char *argv[] = {"-stsh", NULL};  /* leading '-' = login shell */
-    char *envp[] = {"PATH=/bin", "HOME=/root", "TERM=xterm-256color", "USER=root", NULL};
+
+    /* Inherit the session's identity rather than hardcoding root: USER/HOME
+     * come from the environment the desktop was logged into. AspisOS has no
+     * "root" user — uid 0 just carries the name the person chose at install. */
+    const char *user = getenv("USER");
+    const char *home = getenv("HOME");
+    char user_env[96] = "USER=";
+    char home_env[288] = "HOME=";
+    strncat(user_env, (user && user[0]) ? user : "user", sizeof(user_env) - 6);
+    strncat(home_env, (home && home[0]) ? home : "/",    sizeof(home_env) - 6);
+    char *envp[] = {"PATH=/bin", home_env, "TERM=xterm-256color", user_env, NULL};
 
     long pid = syscall(SYS_SPAWN, "/bin/stsh", argv, envp, slave_fd, 0);
     return (int)pid;

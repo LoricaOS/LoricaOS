@@ -110,65 +110,43 @@ static int read_line(const char *prompt, char *buf, int bufsize)
     return i;
 }
 
-/* collect_credentials — prompt for root + optional user account and
- * hash both.  On success, fills *root_hash and (if a user account was
- * entered) *user_hash and *username.  Returns 0 on success, -1 on
- * cancel or mismatch. */
-static int collect_credentials(char *root_hash, int root_hash_sz,
-                               char *username, int username_sz,
+/* collect_credentials — prompt for the primary user account and hash the
+ * password. AspisOS has no "root": this user IS uid 0 (the first uid), and the
+ * same password becomes the sudo-style admin-elevation credential. Fills
+ * *username and *user_hash. Returns 0 on success, -1 on cancel or mismatch. */
+static int collect_credentials(char *username, int username_sz,
                                char *user_hash, int user_hash_sz)
 {
-    char root_pw[64], root_confirm[64];
-    char user_pw[64], user_confirm[64];
+    char pw[64], confirm[64];
 
-    printf("\n--- Root Password ---\n");
-    if (read_password("Root password: ", root_pw, sizeof(root_pw)) == 0) {
-        printf("ERROR: root password cannot be empty\n");
+    printf("\n--- Create your account ---\n");
+    printf("This user is uid 0 — the first user. AspisOS has no separate root;\n");
+    printf("you elevate to admin actions by re-entering this same password.\n");
+    if (read_line("Username: ", username, username_sz) == 0) {
+        printf("ERROR: username cannot be empty\n");
         return -1;
-    }
-    if (read_password("Confirm root password: ",
-                      root_confirm, sizeof(root_confirm)) == 0) {
-        printf("ERROR: confirmation failed\n");
-        return -1;
-    }
-    if (strcmp(root_pw, root_confirm) != 0) {
-        printf("ERROR: passwords do not match\n");
-        return -1;
-    }
-    if (install_hash_password(root_pw, root_hash, root_hash_sz) < 0) {
-        printf("ERROR: crypt() failed\n");
-        return -1;
-    }
-    printf("Root password set.\n");
-
-    printf("\n--- User Account (optional, press Enter to skip) ---\n");
-    int ulen = read_line("Username: ", username, username_sz);
-    if (ulen == 0) {
-        user_hash[0] = '\0';
-        return 0;
     }
     if (!install_username_valid(username)) {
         printf("ERROR: username must be a-z/0-9/_/- (max 31, start a-z or _)\n");
         return -1;
     }
-    if (read_password("Password: ", user_pw, sizeof(user_pw)) == 0) {
-        printf("ERROR: user password cannot be empty\n");
+    if (read_password("Password: ", pw, sizeof(pw)) == 0) {
+        printf("ERROR: password cannot be empty\n");
         return -1;
     }
-    if (read_password("Confirm password: ",
-                      user_confirm, sizeof(user_confirm)) == 0) {
+    if (read_password("Confirm password: ", confirm, sizeof(confirm)) == 0) {
         printf("ERROR: confirmation failed\n");
         return -1;
     }
-    if (strcmp(user_pw, user_confirm) != 0) {
+    if (strcmp(pw, confirm) != 0) {
         printf("ERROR: passwords do not match\n");
         return -1;
     }
-    if (install_hash_password(user_pw, user_hash, user_hash_sz) < 0) {
+    if (install_hash_password(pw, user_hash, user_hash_sz) < 0) {
         printf("ERROR: crypt() failed\n");
         return -1;
     }
-    printf("User '%s' configured (uid=1000).\n", username);
+    printf("User '%s' configured (uid 0).\n", username);
     return 0;
 }
 
@@ -277,11 +255,9 @@ int main(void)
 
     /* Collect credentials BEFORE destructive disk ops so a cancel is
      * still safe. */
-    char root_hash[256] = "";
     char username[64]   = "";
     char user_hash[256] = "";
-    if (collect_credentials(root_hash, sizeof(root_hash),
-                            username, sizeof(username),
+    if (collect_credentials(username, sizeof(username),
                             user_hash, sizeof(user_hash)) < 0) {
         printf("Credential collection failed. Aborting.\n");
         return 1;
@@ -297,9 +273,8 @@ int main(void)
     if (install_run_all(devs[target].name,
                         devs[target].block_count,
                         devs[target].block_size,
-                        root_hash,
-                        username[0] ? username : NULL,
-                        username[0] ? user_hash : NULL,
+                        username,
+                        user_hash,
                         &prog) < 0) {
         printf("\n=== Installation FAILED ===\n");
         return 1;
