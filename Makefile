@@ -156,6 +156,9 @@ user/lib/libinstall/libinstall.a: $(wildcard user/lib/libinstall/*.c user/lib/li
 user/bin/installer/installer.elf: user/bin/installer/main.c user/lib/libinstall/libinstall.a $(MUSL_BUILT)
 	$(MAKE) -C user/bin/installer
 
+user/bin/adminpw/adminpw.elf: user/bin/adminpw/main.c user/lib/libinstall/libinstall.a $(MUSL_BUILT)
+	$(MAKE) -C user/bin/adminpw
+
 user/bin/gui-installer/gui-installer.elf: user/bin/gui-installer/main.c user/lib/glyph/libglyph.a user/lib/libinstall/libinstall.a $(MUSL_BUILT)
 	$(MAKE) -C user/bin/gui-installer
 

@@ -61,11 +61,16 @@ typedef struct {
     char username[64];
     char user_pw[64];
     char user_pw_confirm[64];
+    /* Optional SEPARATE admin password for the installed system; blank =
+     * the account password doubles as the elevation credential. */
+    char admin_new_pw[64];
+    char admin_new_confirm[64];
     char validation_error[128];
 
-    /* Hash (computed at confirm time). Also written as the admin-elevation
-     * credential, so the user elevates with their own password. */
+    /* Hashes (computed at confirm time). admin_hash stays "" when no
+     * separate admin password was chosen. */
     char user_hash[256];
+    char admin_hash[256];
 
     /* Admin authorization (Confirm screen): the LIVE system's admin credential
      * verified by `login -elevate` so the kernel grants DISK_ADMIN for the raw
@@ -86,7 +91,9 @@ static wizard_state_t g_st;
  * so we don't re-run it on redraws. */
 static int s_install_started = 0;
 
-/* Screen 3 focus state. 0=username, 1=password, 2=confirm, 3=next-button. */
+/* Screen 3 focus state. 0-4 = the five fields (username, password, confirm,
+ * admin password, admin confirm), 5 = the Next button. */
+#define USER_NFIELDS 5
 static int s_user_focus = 0;
 
 /* ── Signal handling ────────────────────────────────────────────────── */
@@ -316,6 +323,10 @@ static void screen_user_init_fields(void)
     user_fields[0] = (user_field_t){ "Username",         g_st.username,        sizeof(g_st.username),        0 };
     user_fields[1] = (user_field_t){ "Password",         g_st.user_pw,         sizeof(g_st.user_pw),         1 };
     user_fields[2] = (user_field_t){ "Confirm password", g_st.user_pw_confirm, sizeof(g_st.user_pw_confirm), 1 };
+    user_fields[3] = (user_field_t){ "Admin password (blank = account password)",
+                                     g_st.admin_new_pw,      sizeof(g_st.admin_new_pw),      1 };
+    user_fields[4] = (user_field_t){ "Confirm admin password",
+                                     g_st.admin_new_confirm, sizeof(g_st.admin_new_confirm), 1 };
     user_fields_inited = 1;
 }
 
@@ -342,6 +353,13 @@ static int screen_user_validate(void)
                  "Passwords do not match.");
         return -1;
     }
+    if (g_st.admin_new_pw[0] || g_st.admin_new_confirm[0]) {
+        if (strcmp(g_st.admin_new_pw, g_st.admin_new_confirm) != 0) {
+            snprintf(g_st.validation_error, sizeof(g_st.validation_error),
+                     "Admin passwords do not match.");
+            return -1;
+        }
+    }
     return 0;
 }
 
@@ -354,12 +372,12 @@ static void draw_screen_user(void)
     draw_text18(cx - 100, 72, "User account", 0x00FFFFFF);
 
     int fx = cx - 220;
-    int fy = 120;
+    int fy = 104;
     int field_w = 440;
     int field_h = 32;
-    int gap     = 16;
+    int gap     = 10;
 
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < USER_NFIELDS; i++) {
         int y = fy + i * (field_h + gap + 18);
         draw_text14(fx, y, user_fields[i].label, 0x00A0A0B0);
         draw_fill_rect(&g_st.surf, fx, y + 18, field_w, field_h, 0x002A2A3E);
@@ -382,7 +400,7 @@ static void draw_screen_user(void)
     /* Back + Next buttons */
     draw_button(cx - 160, g_st.fb_h - 120, 100, 40, "Back", 0);
     draw_button(cx + 60, g_st.fb_h - 120, 100, 40, "Next",
-                (s_user_focus == 3));
+                (s_user_focus == USER_NFIELDS));
 
     /* Validation error message */
     if (g_st.validation_error[0]) {
@@ -424,6 +442,12 @@ static void draw_screen_confirm(void)
     draw_text14(lx, y, "Account (uid 0):", 0x00A0A0B0);
     draw_text14(lx + 180, y,
                 g_st.username[0] ? g_st.username : "(none)",
+                0x00FFFFFF);
+    y += 30;
+
+    draw_text14(lx, y, "Admin password:", 0x00A0A0B0);
+    draw_text14(lx + 180, y,
+                g_st.admin_new_pw[0] ? "separate" : "same as account",
                 0x00FFFFFF);
     y += 60;
 
@@ -491,12 +515,24 @@ static void run_install(void)
     if (s_install_started) return;
     s_install_started = 1;
 
-    /* Hash the account password (also becomes the admin-elevation credential). */
+    /* Hash the account password, and the separate admin password if one was
+     * chosen (otherwise the account hash doubles as the elevation credential). */
     if (install_hash_password(g_st.user_pw,
                               g_st.user_hash,
                               sizeof(g_st.user_hash)) < 0) {
         snprintf(g_st.progress_error, sizeof(g_st.progress_error),
                  "failed to hash password");
+        dprintf(2, "[INSTALLER] error=%s\n", g_st.progress_error);
+        g_st.install_failed = 1;
+        return;
+    }
+    g_st.admin_hash[0] = '\0';
+    if (g_st.admin_new_pw[0] &&
+        install_hash_password(g_st.admin_new_pw,
+                              g_st.admin_hash,
+                              sizeof(g_st.admin_hash)) < 0) {
+        snprintf(g_st.progress_error, sizeof(g_st.progress_error),
+                 "failed to hash admin password");
         dprintf(2, "[INSTALLER] error=%s\n", g_st.progress_error);
         g_st.install_failed = 1;
         return;
@@ -515,6 +551,7 @@ static void run_install(void)
         g_st.disks[g_st.selected_disk].block_size,
         g_st.username,
         g_st.user_hash,
+        g_st.admin_hash,
         &p);
 
     if (rc == 0) {
@@ -658,13 +695,13 @@ static void handle_key_user(char c)
     screen_user_init_fields();
 
     if (c == '\t') {
-        /* Tab cycles focus 0..3 (username, password, confirm, Next) */
-        s_user_focus = (s_user_focus + 1) % 4;
+        /* Tab cycles focus over the fields then the Next button. */
+        s_user_focus = (s_user_focus + 1) % (USER_NFIELDS + 1);
         g_st.dirty = 1;
         return;
     }
     if (c == '\n' || c == '\r') {
-        if (s_user_focus < 3) {
+        if (s_user_focus < USER_NFIELDS) {
             s_user_focus++;
             g_st.dirty = 1;
             return;
@@ -678,7 +715,7 @@ static void handle_key_user(char c)
         g_st.dirty = 1;
         return;
     }
-    if (s_user_focus >= 3) return;
+    if (s_user_focus >= USER_NFIELDS) return;
 
     user_field_t *f = &user_fields[s_user_focus];
     int len = (int)strlen(f->buf);

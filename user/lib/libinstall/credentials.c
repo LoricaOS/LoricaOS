@@ -86,14 +86,18 @@ int install_hash_password(const char *password, char *out, int outsz)
  * person installing the system IS uid 0; there is no separate superuser account
  * and no 1000+ convention. Additional users a distro adds can start at uid 1.
  *
- * The chosen password is also written as the admin-elevation credential
- * (/etc/aegis/admin), so the user gains admin capabilities by re-typing their
- * own password (sudo-style) rather than knowing a second secret. */
+ * The admin-elevation credential (/etc/aegis/admin) is `admin_hash` when the
+ * installer collected a separate admin password, else the user's own hash —
+ * sudo-style elevation by re-typing their own password rather than knowing a
+ * second secret. Changeable later with `adminpw`. */
 int install_write_credentials(const char *username,
-                              const char *user_hash)
+                              const char *user_hash,
+                              const char *admin_hash)
 {
     if (!username || !username[0] || !user_hash || !user_hash[0])
         return -1;
+    if (!admin_hash || !admin_hash[0])
+        admin_hash = user_hash;
 
     /* Refuse a malformed username rather than corrupt the account files. */
     if (!install_username_valid(username))
@@ -137,14 +141,14 @@ int install_write_credentials(const char *username,
         close(fd);
     }
 
-    /* /etc/aegis/admin — admin-elevation credential = the user's own hash, so
-     * `login -elevate` re-authenticates with the password they just chose. */
+    /* /etc/aegis/admin — the admin-elevation credential `login -elevate`
+     * verifies (the separate admin hash if one was chosen, else the user's). */
     {
         int fd = open("/etc/aegis/admin", O_WRONLY | O_CREAT | O_TRUNC);
         if (fd < 0)
             return -1;
         char line[256];
-        int n = snprintf(line, sizeof(line), "%s\n", user_hash);
+        int n = snprintf(line, sizeof(line), "%s\n", admin_hash);
         if (write(fd, line, (size_t)n) != n) { close(fd); return -1; }
         close(fd);
     }
