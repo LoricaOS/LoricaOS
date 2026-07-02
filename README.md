@@ -34,5 +34,6 @@ To build offline, drop the kernel image at `vendor/aegis-<KERNEL_VERSION>.elf`.
 The admin password unlocks **capability elevation** (Settings, the installer,
 `aegisctl`) in the live session. There is no root to log in as — `uid=0` is
 cosmetic under Aegis and grants no authority by itself. On installed systems
-the installer sets your own user + admin passwords; the live defaults above
-apply only to the ISO.
+the installer sets your own user + admin passwords (the admin password may be
+separate, or default to your account password), and `adminpw` changes the
+admin credential later; the live defaults above apply only to the ISO.
