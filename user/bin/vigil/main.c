@@ -22,6 +22,8 @@ typedef struct {
     char     name[64];
     char     run_cmd[256];
     char     mode[16];         /* "graphical", "text", or "" (always) */
+    char     cmdline_tok[48];  /* optional: start only if this token is on the
+                                * kernel cmdline (test/diagnostic services) */
     policy_t policy;
     int      max_restarts;
     pid_t    pid;
@@ -34,6 +36,7 @@ static int       s_nsvc = 0;
 static volatile int s_got_usr1  = 0;
 static volatile int s_got_term  = 0;
 static char s_boot_mode[16] = "text"; /* default to text if no cmdline */
+static char s_cmdline[256]  = "";     /* kernel cmdline (for service gating) */
 static int  s_quiet = 0;             /* 1 = suppress startup messages */
 
 struct linux_dirent64 {
@@ -59,6 +62,10 @@ static void handle_term(int sig) { (void)sig; s_got_term = 1; }
  * and sync as poweroff, then sys_reboot(1) instead of S5. */
 static volatile int s_got_reboot = 0;
 static void handle_int(int sig)  { (void)sig; s_got_term = 1; s_got_reboot = 1; }
+/* No-op SIGCHLD handler: its only job is to interrupt the supervisor's 1 s
+ * nanosleep (EINTR) so a crashed service is reaped + respawned immediately
+ * instead of up to a second late (SIG_DFL never interrupts the sleep). */
+static void handle_chld(int sig) { (void)sig; }
 
 static int
 read_file(const char *path, char *buf, int bufsz)
@@ -103,6 +110,15 @@ load_service(const char *name)
     s->mode[0] = '\0';
     snprintf(path, sizeof(path), "%s/%s/mode", VIGIL_SERVICES_DIR, name);
     read_file(path, s->mode, sizeof(s->mode));
+
+    /* Read optional cmdline-token gate.  The stress/diagnostic services used
+     * to gate themselves (fork+exec+ELF-load, read /proc/cmdline, exit 0) —
+     * eight wasted spawn cycles on every production boot.  With the token in
+     * the service dir, vigil skips the spawn entirely unless the token is on
+     * the kernel cmdline. */
+    s->cmdline_tok[0] = '\0';
+    snprintf(path, sizeof(path), "%s/%s/cmdline", VIGIL_SERVICES_DIR, name);
+    read_file(path, s->cmdline_tok, sizeof(s->cmdline_tok));
 
     s->pid      = -1;
     s->restarts = 0;
@@ -266,8 +282,8 @@ main(void)
 
     /* Detect boot mode + quiet flag from kernel command line BEFORE any output */
     {
-        char cmdline[256] = "";
-        read_file("/proc/cmdline", cmdline, sizeof(cmdline));
+        char *cmdline = s_cmdline;
+        read_file("/proc/cmdline", s_cmdline, sizeof(s_cmdline));
         if (strstr(cmdline, "boot=graphical"))
             memcpy(s_boot_mode, "graphical", 10);
         else if (strstr(cmdline, "boot=text"))
@@ -308,7 +324,7 @@ main(void)
     signal(SIGUSR1, handle_usr1);
     signal(SIGTERM, handle_term);
     signal(SIGINT,  handle_int);
-    signal(SIGCHLD, SIG_DFL);
+    signal(SIGCHLD, handle_chld);
 
     remove_installers_if_installed(is_live);
 
@@ -333,6 +349,12 @@ main(void)
         /* Skip services whose mode doesn't match boot mode */
         if (s_svcs[i].mode[0] != '\0' &&
             strcmp(s_svcs[i].mode, s_boot_mode) != 0) {
+            s_svcs[i].active = 0;
+            continue;
+        }
+        /* Skip cmdline-gated services whose token is absent */
+        if (s_svcs[i].cmdline_tok[0] != '\0' &&
+            strstr(s_cmdline, s_svcs[i].cmdline_tok) == NULL) {
             s_svcs[i].active = 0;
             continue;
         }
