@@ -75,6 +75,27 @@
   a spiked minesweeper mine. These live in the packages, **not** in the toolkit,
   so the OS doesn't carry art for apps that may not be installed.
 
+### Installer fixes (2026-07-02 — bare-metal testing)
+- **GUI installer no longer freezes at the admin-password step.** Root cause
+  was a pre-existing kernel bug (present since 1.0.0): a process that `fork()`s
+  while holding a `MAP_SHARED` memfd (its Lumen window buffer) had that mapping
+  silently COW-broken — the installer's `login -elevate` fork made every frame
+  it drew afterward land in a private copy the compositor never saw, so the
+  window stuck on the welcome screen (read as a system hang). Fixed in the
+  kernel with a distinct `VMM_FLAG_SHARED_OWNED` PTE flag so fork inherits
+  refcounted shared frames as-is instead of copying them.
+- **CLI installer "ERROR: write /etc/passwd failed" fixed.** The installer had
+  `DISK_ADMIN` but not `INSTALL`, and `/etc/aegis/admin` is an install-protected
+  path — writing the admin credential hit EPERM. Both installer cap policies now
+  include `INSTALL`.
+- **CLI installer skips the admin prompt when already elevated** (launched from
+  a red `[admin]` shell) — probes disk access first and only runs
+  `login -elevate` if needed.
+- Kernel now logs `[SIGNAL] pid=N <exe> killed by signal S` on abnormal
+  termination (silent kills were undiagnosable).
+- Verified end-to-end on CT117: both installers complete a real NVMe write and
+  the installed disk boots to the greeter/login under OVMF.
+
 ### Performance pass (2026-07-01 — kernel + OS)
 
 **Kernel — storage (aegis commit `fe028c4`).** The three storage changes
