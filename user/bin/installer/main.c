@@ -165,17 +165,26 @@ int main(void)
     printf("WARNING: All data on the disk will be destroyed!\n\n");
 
     /* Raw whole-disk access (listing AND writing disks via sys_blkdev_*)
-     * requires an admin session (CAP_KIND_DISK_ADMIN). Authenticate via
-     * /bin/login -elevate on the shared tty up front — before enumerating
-     * disks — or every subsequent block syscall returns ENOCAP. */
-    printf("--- Administrator authorization ---\n");
-    printf("Installing requires admin authorization.\n");
-    if (install_elevate(NULL) < 0) {
-        printf("\nERROR: admin authentication required to install.\n");
-        printf("Aborting — no changes were made.\n");
-        return 1;
+     * requires an admin session (CAP_KIND_DISK_ADMIN). If this shell is
+     * already admin-elevated (red [admin] prompt) the disk-list probe
+     * succeeds and no re-authentication is needed; otherwise authenticate
+     * via /bin/login -elevate on the shared tty up front — before
+     * enumerating disks — or every block syscall returns ENOCAP. */
+    {
+        install_blkdev_t probe[1];
+        if (install_list_blkdevs(probe, 1) < 0) {
+            printf("--- Administrator authorization ---\n");
+            printf("Installing requires admin authorization.\n");
+            if (install_elevate(NULL) < 0) {
+                printf("\nERROR: admin authentication required to install.\n");
+                printf("Aborting — no changes were made.\n");
+                return 1;
+            }
+            printf("\n");
+        } else {
+            printf("Admin session detected — skipping re-authorization.\n\n");
+        }
     }
-    printf("\n");
 
     install_blkdev_t devs[8];
     int ndevs = install_list_blkdevs(devs, 8);
