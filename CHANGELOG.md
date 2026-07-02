@@ -7,8 +7,10 @@
 > security fixes, before this ships. This file is the running record of every
 > 1.0.0 → 1.1.0 change; keep appending as work lands.
 >
-> The Aegis **kernel is unchanged** in this release — 1.1.0 is a GUI/userland
-> depth pass across the Lumen ecosystem (compositor, toolkit, apps, packaging).
+> 1.1.0 started as a GUI/userland depth pass across the Lumen ecosystem
+> (compositor, toolkit, apps, packaging). As of 2026-07-01 it ALSO carries a
+> new Aegis **kernel** artifact: the global performance pass (see the
+> "Performance pass" section below).
 
 ### Highlights
 - The dock is a real taskbar: window minimize, running/minimized indicators,
@@ -19,6 +21,11 @@
   with live prefs, a **Tunes** music-player redesign, an **Image Viewer** that
   pages through folders and rotates.
 - Every app now has a real icon; package apps ship their own.
+- **Global performance pass** (kernel + compositor + installer + boot): NVMe
+  moves 128 KiB per command instead of 4 KiB, sequential file reads issue ~16x
+  fewer device commands, mmap faults read ahead 16 pages, TCP sends full-size
+  segments, app frames no longer repaint the whole desktop, the idle desktop
+  no longer wakes 60x/sec, and installs issue ~16x fewer I/O round-trips.
 
 ### Compositor & window management (lumen)
 - Window **minimize** + push the live window list to the dock (taskbar protocol).
@@ -69,22 +76,64 @@
   so the OS doesn't carry art for apps that may not be installed.
 
 ### Performance pass (2026-07-01 — kernel + OS)
-> Note: this supersedes the "kernel is unchanged" line above — 1.1.0 now
-> carries a new kernel artifact with the storage/net/mm fast paths below.
-- **Kernel (aegis, commit `fe028c4`):** NVMe multi-page PRP transfers (one
-  command moves up to 128 KiB instead of a serialized 4 KiB round-trip per
-  page, clamped to controller MDTS); ext2 batches contiguous uncached blocks
-  into single device reads (perfbench: read-pass device commands 464 → 30,
-  VERIFY OK); file-mmap faults cluster-populate 16 pages per trap through one
-  generation-validated read; TCP segments outbound data to the peer's real
-  MSS (1460 typical) instead of 536; ranged (not per-page) cross-CPU TLB
-  shootdown on kernel-page frees; FPU save/restore skipped for kernel tasks;
-  word-wide kmem*/arm64-uaccess; 4 KiB (was 256 B) syscall write staging.
-- **Compositor (lumen `d7dcb98`):** client frames no longer force a
-  full-screen recomposite + re-blur of every frosted window — only the first
-  present (reveal) does; routine frames ride the dirty-rect path and reuse
-  cached blurs. Idle loop now blocks in `poll()` on all input fds instead of
-  a 16 ms sleep-poll cycle (idle wakeups 60/s → 4/s, input wakes instantly).
+
+**Kernel — storage (aegis commit `fe028c4`).** The three storage changes
+compound: an mmap fault used to mean one trap + one 4 KiB ext2 read + one
+4 KiB NVMe command *per page*; it now means 1/16th the traps, each satisfied
+by one large read that reaches the device as one command.
+- **NVMe multi-page PRP transfers** — the driver had a single 4 KiB bounce
+  page and rejected anything larger, so a 128 KiB read was 32 fully
+  serialized submit+busy-poll round-trips. The bounce is now a 32-page
+  (128 KiB) set described to the controller via a PRP list, clamped to the
+  controller's advertised MDTS; the failed-command quarantine reallocates the
+  whole set. The blkdev syscall bounce grew 4 KiB → 64 KiB to match.
+- **ext2 contiguous-run reads** — `ext2_read` batches runs of blocks that are
+  consecutive on disk and *not in the block cache* into ONE direct device
+  read into the caller's buffer (cached/dirty blocks stay authoritative; bulk
+  data no longer evicts the hot indirect/bitmap blocks from the 16-slot
+  cache). Measured with the in-kernel perfbench: the read pass over a 464-
+  block file dropped from ~1 device read per block to **30 device commands**,
+  content VERIFY OK.
+- **mmap fault readahead** — file-backed faults cluster-populate up to 16
+  pages through one generation-validated ext2 read (per-CPU fault buffer
+  grew to 16 pages). Sequential mmap reads take ~1/16th the page faults and
+  device commands — this was the known ext2/mmap perf wall (Lantern/ports).
+
+**Kernel — everything else (same commit).**
+- **TCP send MSS** — we advertised MSS 1460 but chunked our own sends to the
+  RFC-879 default 536. The peer's MSS option is now parsed from its SYN and
+  outbound data segments to it (1460 typical, clamped, 536 only when the peer
+  offers none): ~3x fewer packets/checksums for uploads and served responses.
+- **Batched TLB shootdown** — freeing N kernel pages used to broadcast one
+  shootdown IPI (+ ack spin) per page; `kva_free_pages`/`kva_unmap_keep_frames`
+  now clear all PTEs and issue ONE ranged shootdown (task teardown alone was
+  ~14 IPI rounds per exit).
+- **FPU context-switch skip** — XSAVE/XRSTOR of the 1 KiB FPU area ran on
+  every switch; it is now skipped for kernel tasks on both the save and
+  restore side (kernel is -mno-sse and never owns live FPU state).
+- **Word-wide copies** — `kmemcpy`/`kmemset`/`kmemcmp` (byte loops used at
+  ~70 call sites across net/fs/drivers) and the arm64 user-copy path
+  (`uaccess.S`, byte-at-a-time on EVERY syscall transfer) now move 8 bytes
+  per iteration; the arm64 word ops carry exception-table entries like the
+  byte ops did.
+- **Write staging** — `sys_write`/`sys_writev` staged user data in 256-byte
+  chunks (a 4 KiB write = 16 `ops->write` calls, each redoing fd cache
+  lookups); staging is now one page.
+
+**Compositor (lumen `d7dcb98`).**
+- **Client frames stopped defeating damage tracking** — `handle_damage` set
+  `full_redraw` on EVERY client frame, so each terminal keystroke / sysmon
+  tick refilled the wallpaper and re-blurred every frosted window. Only the
+  first present (window reveal) forces a full recomposite now; routine frames
+  ride the existing dirty-rect path and reuse every other window's cached
+  blur. This was the single biggest lever in the graphical stack.
+- **Event-driven idle loop** — the main loop woke 60x/sec (read/waitpid/poll
+  syscalls + 16 ms nanosleep) even on an idle desktop. It now blocks in
+  `poll()` on stdin, the mouse, the server socket, every client fd (new
+  `lumen_server_collect_fds()`), and every PTY master, with a 250 ms cap for
+  the clock/prefs check: idle wakeups 60/s → 4/s, and input wakes the loop
+  instantly instead of mid-sleep. The once-a-second clock/prefs refresh is
+  keyed to wall-clock seconds instead of an iteration count.
 - **Installer:** 64 KiB transfer chunks (was 4 KiB) through the enlarged
   kernel blkdev bounce — the 4-pass copy+verify install issues ~16x fewer
   syscall→NVMe round-trips.
@@ -122,3 +171,7 @@
       1.0.1 or fold into 1.1.0 — decide at publish.
 - [ ] Re-cut + publish the herald `.hpkg`s to Chancery (green-light gated;
       scrub the signing key after).
+- [ ] **Publish the new Aegis kernel release** (perf pass `fe028c4`) and bump
+      `KERNEL_VERSION` — fetch-kernel.sh still pins the pre-pass 1.0.0
+      artifact; until the release is cut, builds only get the new kernel via
+      the local vendor/ cache.
