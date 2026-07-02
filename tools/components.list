@@ -6,19 +6,19 @@
 #
 # gui-installer is NOT here — it is the live-ISO installer, built in-tree and
 # auto-removed on installed systems.
-lumen 1.0.0
-bastion 1.0.0
-citadel-dock 1.0.0
-lumen-applications-menu 1.0.0
-lumen-dbg 1.0.0
-lumen-settings 1.0.0
-lumen-terminal 1.0.0
-lumen-calculator 1.0.0
-lumen-editor 1.0.0
-lumen-filemanager 1.0.0
-lumen-run 1.0.0
-lumen-tunes 1.0.0
-lumen-calendar 1.0.0
-lumen-imageviewer 1.0.0
-lumen-sysmon 1.0.0
-lumen-netman 1.0.0
+lumen 1.0.0 dffacab0e439da5955479b8b7efd23377dbe322bd4edddcd4dc602d512b5abd4
+bastion 1.0.0 14ae0a013cb25f906834f78d77248586e3ed655d1aabe681fa0825e4fb5a9531
+citadel-dock 1.0.0 56a19b35e180a92404f48559b1639b28a7982a2a722d24c388c7900657213a68
+lumen-applications-menu 1.0.0 25b8cdff0a003ddbeba385f80382577194c7e89c41060a35b983c301db2a172c
+lumen-dbg 1.0.0 2e132c0e1f72367d609348609ad39e92ef2f3125dfd4be633dcd63041ba2e9d8
+lumen-settings 1.0.0 0a686bb0f70912ccbceffa832262db9dc9674714048b664981ffc64232449466
+lumen-terminal 1.0.0 c3d6c5100000bf950d067485abe8774a3a67ec92e97014e4754ffd160a9577f2
+lumen-calculator 1.1.0 06ddd50e54c03b574dda099f8d3c06257cfcccb77f7c4d72346e65ee3ee75fda
+lumen-editor 1.0.0 f5330df5c0fc5d789a8558408bfa9de2f8139441baa393b0f6d91c17a06643b9
+lumen-filemanager 1.0.0 07e4d186c159fd4f983bd107cb52f4c1a76aa6a585c86a4403b173b73e34e46c
+lumen-run 1.0.0 7379da64d1a09526bdc9bac97160228c2c3a745fdfade021849649488191c05d
+lumen-tunes 1.0.0 1f309ed3a59e5fdfc4fa1f7b59913f721ac43da32f3c07e58997b16ea32abf7d
+lumen-calendar 1.0.0 e5226cee6a0875dc339379dc7669b37aa2671520b88392f2313e27a6fcee3366
+lumen-imageviewer 1.0.0 14a6d2a4ade7084d20db05424022e6dfe5dc931990dd4a6870b9179f6564edb1
+lumen-sysmon 1.0.0 74c277bb2dba430308dd0b5206ae23f836fb5af993720d30bde44da56092c29d
+lumen-netman 1.0.0 f7ec362692ff921ba800fd566803710f014a0ddca38186fd0abb1cf803143ce4

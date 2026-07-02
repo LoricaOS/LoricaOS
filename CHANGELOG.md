@@ -96,6 +96,30 @@
 - Verified end-to-end on CT117: both installers complete a real NVMe write and
   the installed disk boots to the greeter/login under OVMF.
 
+### Beautification pass (2026-07-02 — glyph + lumen + apps)
+- **Anti-aliased rendering primitives** (glyph): filled circles, rounded-rect
+  fills, translucent rounded rects, and rounded outlines now draw with
+  per-pixel edge coverage — every button, card, pill, toggle and highlight in
+  the OS loses its jagged corners at once. `draw_rounded_outline` also went
+  from O(w·h) to O(perimeter).
+- **Traffic lights redrawn** — new shared `draw_traffic_light()` widget: smooth
+  AA circles with a darker rim, and engraved ×/−/zoom symbols on the focused
+  window (the old ones were rough Bresenham circles with a text "x").
+- **Window shadows reworked** — the 5-layer stacked shadow (visible banding)
+  is now a per-pixel penumbra falling off quadratically with distance to the
+  window, with naturally rounded corners. Cheaper as well: only the visible
+  ring outside the window body is computed.
+- **Theme recolor: "obsidian".** The dark palette moved from blue-slate to
+  near-black neutrals with a violet undertone; the default accent is now
+  indigo (accent picker unchanged — blue is still available). Compositor
+  frost tints retuned to match. Light palette and the traffic-light/status
+  colors untouched.
+- **Applications menu**: keyboard selection is an accent-tinted pill with a
+  1px accent ring instead of a flat white wash; hover is subtler.
+- All 16 desktop components rebuilt against the new toolkit and re-pinned in
+  the component lockfile (`lumen-calculator` pin corrected to its 1.1.0
+  artifact — the list still pointed at the stale 1.0.0 package).
+
 ### Performance pass (2026-07-01 — kernel + OS)
 
 **Kernel — storage (aegis commit `fe028c4`).** The three storage changes
