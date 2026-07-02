@@ -116,6 +116,14 @@
   colors untouched.
 - **Applications menu**: keyboard selection is an accent-tinted pill with a
   1px accent ring instead of a flat white wash; hover is subtler.
+- **Greeter cleaned up (bastion)**: the v1 disclaimer and the network-status
+  line are gone (the warning lives in About and the terminal banner; the net
+  line is now diagnostics-only under `greeter_diag`, like the input counters).
+  Desktop-gradient background, alpha-blended logo, rounded input wells with an
+  accent focus ring + caret, rounded button with centered text.
+- **Topbar context menu**: accent rounded hover pill with on-accent text, and
+  the rounded corners now restore the real wallpaper instead of stamping flat
+  theme-color pixels (visible dots on photo wallpapers).
 - All 16 desktop components rebuilt against the new toolkit and re-pinned in
   the component lockfile (`lumen-calculator` pin corrected to its 1.1.0
   artifact — the list still pointed at the stale 1.0.0 package).
