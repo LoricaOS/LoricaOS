@@ -18,7 +18,11 @@
  */
 
 #define RAM_BLOCK_SIZE   512ULL
-#define XFER_BYTES       4096ULL
+/* 64 KiB per transfer: the kernel's blkdev syscall bounce and the NVMe
+ * driver's multi-page PRP path both take 64 KiB in one shot now, so this is
+ * one syscall -> one NVMe command per chunk (the old 4 KiB value made a
+ * 44 MiB install ~45k serialized round-trips across its four passes). */
+#define XFER_BYTES       65536ULL
 /* ESP_ALIGN_BYTES / ESP_SIZE_BYTES come from libinstall.h (shared with
  * gpt.c — the GPT layout and this raw copy must agree). */
 
@@ -36,8 +40,8 @@ static int copy_512b(const char *src_dev, uint64_t src_lba,
                      const char *dst_dev, uint64_t dst_lba,
                      uint64_t count, install_progress_t *p)
 {
-    static unsigned char buf[4096];
-    uint64_t max_chunk = XFER_BYTES / RAM_BLOCK_SIZE; /* = 8 */
+    static unsigned char buf[XFER_BYTES];
+    uint64_t max_chunk = XFER_BYTES / RAM_BLOCK_SIZE; /* = 128 */
     int last_pct = -1;
     uint64_t done = 0;
 
@@ -69,16 +73,16 @@ static int copy_512b(const char *src_dev, uint64_t src_lba,
 /*
  * Copy src_block_count 512-byte ramdisk sectors to a raw device (dst_dev)
  * that may have native block_size sectors.  dst_start_lba is in native
- * block_size units.  Reads 8 × 512B (= 4096B) at a time; writes
- * 4096/block_size native sectors at a time.
+ * block_size units.  Reads 128 × 512B (= 64 KiB) at a time; writes
+ * XFER_BYTES/block_size native sectors at a time.
  */
 static int copy_to_native(const char *src_dev, uint64_t src_block_count,
                            const char *dst_dev, uint64_t dst_start_lba,
                            uint32_t dst_block_size, install_progress_t *p)
 {
-    static unsigned char buf[4096];
-    uint64_t src_per_xfer = XFER_BYTES / RAM_BLOCK_SIZE;          /* = 8 */
-    uint64_t dst_per_xfer = XFER_BYTES / (uint64_t)dst_block_size; /* = 1 for 4K */
+    static unsigned char buf[XFER_BYTES];
+    uint64_t src_per_xfer = XFER_BYTES / RAM_BLOCK_SIZE;          /* = 128 */
+    uint64_t dst_per_xfer = XFER_BYTES / (uint64_t)dst_block_size; /* = 16 for 4K */
     uint64_t total_xfers  = (src_block_count + src_per_xfer - 1) / src_per_xfer;
     int last_pct = -1;
     uint64_t i;
@@ -124,9 +128,9 @@ static int verify_512b(const char *src_dev, uint64_t src_lba,
                        const char *dst_dev, uint64_t dst_lba,
                        uint64_t count, install_progress_t *p)
 {
-    static unsigned char buf_a[4096];
-    static unsigned char buf_b[4096];
-    uint64_t max_chunk = XFER_BYTES / RAM_BLOCK_SIZE; /* = 8 */
+    static unsigned char buf_a[XFER_BYTES];
+    static unsigned char buf_b[XFER_BYTES];
+    uint64_t max_chunk = XFER_BYTES / RAM_BLOCK_SIZE; /* = 128 */
     int last_pct = -1;
     uint64_t done = 0;
 
@@ -164,14 +168,14 @@ static int verify_512b(const char *src_dev, uint64_t src_lba,
 }
 
 /* Verify counterpart of copy_to_native: same chunking, full-page compares
- * (the copy wrote zero-padded 4096-byte transfers, so padding matches the
+ * (the copy wrote zero-padded XFER_BYTES transfers, so padding matches the
  * memset below). */
 static int verify_to_native(const char *src_dev, uint64_t src_block_count,
                             const char *dst_dev, uint64_t dst_start_lba,
                             uint32_t dst_block_size, install_progress_t *p)
 {
-    static unsigned char buf_a[4096];
-    static unsigned char buf_b[4096];
+    static unsigned char buf_a[XFER_BYTES];
+    static unsigned char buf_b[XFER_BYTES];
     uint64_t src_per_xfer = XFER_BYTES / RAM_BLOCK_SIZE;
     uint64_t dst_per_xfer = XFER_BYTES / (uint64_t)dst_block_size;
     uint64_t total_xfers  = (src_block_count + src_per_xfer - 1) / src_per_xfer;

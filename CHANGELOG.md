@@ -68,6 +68,45 @@
   a spiked minesweeper mine. These live in the packages, **not** in the toolkit,
   so the OS doesn't carry art for apps that may not be installed.
 
+### Performance pass (2026-07-01 — kernel + OS)
+> Note: this supersedes the "kernel is unchanged" line above — 1.1.0 now
+> carries a new kernel artifact with the storage/net/mm fast paths below.
+- **Kernel (aegis, commit `fe028c4`):** NVMe multi-page PRP transfers (one
+  command moves up to 128 KiB instead of a serialized 4 KiB round-trip per
+  page, clamped to controller MDTS); ext2 batches contiguous uncached blocks
+  into single device reads (perfbench: read-pass device commands 464 → 30,
+  VERIFY OK); file-mmap faults cluster-populate 16 pages per trap through one
+  generation-validated read; TCP segments outbound data to the peer's real
+  MSS (1460 typical) instead of 536; ranged (not per-page) cross-CPU TLB
+  shootdown on kernel-page frees; FPU save/restore skipped for kernel tasks;
+  word-wide kmem*/arm64-uaccess; 4 KiB (was 256 B) syscall write staging.
+- **Compositor (lumen `d7dcb98`):** client frames no longer force a
+  full-screen recomposite + re-blur of every frosted window — only the first
+  present (reveal) does; routine frames ride the dirty-rect path and reuse
+  cached blurs. Idle loop now blocks in `poll()` on all input fds instead of
+  a 16 ms sleep-poll cycle (idle wakeups 60/s → 4/s, input wakes instantly).
+- **Installer:** 64 KiB transfer chunks (was 4 KiB) through the enlarged
+  kernel blkdev bounce — the 4-pass copy+verify install issues ~16x fewer
+  syscall→NVMe round-trips.
+- **Boot:** vigil now honors an optional per-service `cmdline` token file and
+  skips gated services without spawning them — the 8 stress/diagnostic
+  services (smpstress, futexstress, mmfaultstress, vforkstress, forkbench,
+  perfbench-ipc, dltest, selftest) no longer cost a fork+exec+ELF-load each
+  on every production boot (they self-gated to a no-op before). vigil also
+  reaps crashed services immediately (SIGCHLD wakes the supervisor) instead
+  of up to 1 s late.
+- **Slimming:** startup.mp3 + sample.bmp moved to the desktop skeleton
+  (server image drops ~150 KB); unused Inter-Regular.otf removed from the
+  repo (only the .ttf was ever packaged).
+- Gates: ostest (desktop→greeter), servertest, selftest (CAPTEST 10/10 —
+  proving the cmdline gate still fires with the token present), x86+arm64
+  kernel suites, perfbench VERIFY.
+- Deferred (surveyed, not built): HHDM physical direct-map for the VMM (the
+  remaining structural win — removes the locked map-window + invlpg pairs
+  from every fault/fork; big vmm.c rewrite), ext2 dentry/name cache, e1000
+  RX IRQ (virtio-net already has one), scoping full_redraw out of window
+  raise/open-anim paths.
+
 ---
 
 ### Pending before release
