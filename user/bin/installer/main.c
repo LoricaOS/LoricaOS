@@ -111,17 +111,19 @@ static int read_line(const char *prompt, char *buf, int bufsize)
 }
 
 /* collect_credentials — prompt for the primary user account and hash the
- * password. LoricaOS has no "root": this user IS uid 0 (the first uid), and the
- * same password becomes the sudo-style admin-elevation credential. Fills
- * *username and *user_hash. Returns 0 on success, -1 on cancel or mismatch. */
+ * password. LoricaOS has no "root": this user IS uid 0 (the first uid). The
+ * admin-elevation credential defaults to the same password (sudo-style), but
+ * the user may choose a separate one; *admin_hash is left empty ("") when
+ * they don't. Returns 0 on success, -1 on cancel or mismatch. */
 static int collect_credentials(char *username, int username_sz,
-                               char *user_hash, int user_hash_sz)
+                               char *user_hash, int user_hash_sz,
+                               char *admin_hash, int admin_hash_sz)
 {
     char pw[64], confirm[64];
 
     printf("\n--- Create your account ---\n");
     printf("This user is uid 0 — the first user. LoricaOS has no separate root;\n");
-    printf("you elevate to admin actions by re-entering this same password.\n");
+    printf("admin actions are authorized by the admin password (sudo-style).\n");
     if (read_line("Username: ", username, username_sz) == 0) {
         printf("ERROR: username cannot be empty\n");
         return -1;
@@ -146,6 +148,29 @@ static int collect_credentials(char *username, int username_sz,
         printf("ERROR: crypt() failed\n");
         return -1;
     }
+
+    /* Optional separate admin password (changeable later with `adminpw`). */
+    admin_hash[0] = '\0';
+    printf("\n--- Admin password ---\n");
+    printf("Authorizes admin actions (installer, disk access, system config).\n");
+    printf("Press Enter to use your account password.\n");
+    if (read_password("Admin password (Enter = account password): ",
+                      pw, sizeof(pw)) > 0) {
+        if (read_password("Confirm admin password: ",
+                          confirm, sizeof(confirm)) == 0 ||
+            strcmp(pw, confirm) != 0) {
+            printf("ERROR: admin passwords do not match\n");
+            return -1;
+        }
+        if (install_hash_password(pw, admin_hash, admin_hash_sz) < 0) {
+            printf("ERROR: crypt() failed\n");
+            return -1;
+        }
+        printf("Separate admin password configured.\n");
+    } else {
+        printf("Admin password = account password.\n");
+    }
+
     printf("User '%s' configured (uid 0).\n", username);
     return 0;
 }
@@ -264,10 +289,12 @@ int main(void)
 
     /* Collect credentials BEFORE destructive disk ops so a cancel is
      * still safe. */
-    char username[64]   = "";
-    char user_hash[256] = "";
+    char username[64]    = "";
+    char user_hash[256]  = "";
+    char admin_hash[256] = "";
     if (collect_credentials(username, sizeof(username),
-                            user_hash, sizeof(user_hash)) < 0) {
+                            user_hash, sizeof(user_hash),
+                            admin_hash, sizeof(admin_hash)) < 0) {
         printf("Credential collection failed. Aborting.\n");
         return 1;
     }
@@ -284,6 +311,7 @@ int main(void)
                         devs[target].block_size,
                         username,
                         user_hash,
+                        admin_hash,
                         &prog) < 0) {
         printf("\n=== Installation FAILED ===\n");
         return 1;

@@ -98,11 +98,13 @@ int install_username_valid(const char *username);
 /* Write /etc/passwd, /etc/shadow, /etc/group and the /etc/aegis/admin
  * elevation credential on the currently mounted rootfs for the single
  * primary user. LoricaOS has no "root": that user IS uid 0 (uid 0 is just
- * the first assigned uid and grants no power). Both `username` and
- * `user_hash` are required; the hash is also written as the admin
- * credential (sudo-style elevation with the user's own password). */
+ * the first assigned uid and grants no power). `username` and `user_hash`
+ * are required. `admin_hash` is the SEPARATE admin-elevation credential;
+ * pass NULL (or "") to default it to `user_hash` (sudo-style elevation
+ * with the user's own password). */
 int install_write_credentials(const char *username,
-                              const char *user_hash);
+                              const char *user_hash,
+                              const char *admin_hash);
 
 /* One-shot orchestration driver.  Runs every phase in order using
  * the supplied progress struct.  Both the TUI and GUI installer
@@ -125,6 +127,7 @@ int install_run_all(const char *devname, uint64_t disk_blocks,
                     uint32_t block_size,
                     const char *username,
                     const char *user_hash,
+                    const char *admin_hash,   /* NULL/"" = user_hash */
                     install_progress_t *p);
 
 /* Obtain a sudo-style admin session for THIS process so the kernel will

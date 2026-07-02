@@ -75,6 +75,26 @@
   a spiked minesweeper mine. These live in the packages, **not** in the toolkit,
   so the OS doesn't carry art for apps that may not be installed.
 
+### Admin password management (2026-07-02)
+- **Both installers can now set a SEPARATE admin password** during install.
+  The CLI installer prompts for it after the account password (Enter keeps
+  the sudo-style default of the account password); the GUI installer's User
+  screen gained "Admin password (blank = account password)" + confirm fields,
+  and the Confirm screen summarizes which mode was chosen.
+- **New `adminpw` tool** — change the admin-elevation credential on an
+  installed (or live) system. Verifies the CURRENT admin password through
+  `login -elevate` (which also elevates the session), then rewrites
+  `/etc/aegis/admin` with the new SHA-512 crypt hash. Its caps.d policy is
+  admin-tier `AUTH INSTALL`: AUTH because the kernel gates any open of the
+  credential file (shadow-grade), INSTALL because the file is
+  install-protected. No new kernel surface.
+- libinstall: `install_write_credentials` / `install_run_all` take an
+  `admin_hash` (NULL/"" = account hash, unchanged behavior).
+- Verified end-to-end in QEMU: installed with a separate admin password;
+  on the installed disk the account password does NOT elevate and the admin
+  one does; `adminpw` rotated the credential; the old admin password is
+  rejected and the new one elevates.
+
 ### Installer fixes (2026-07-02 — bare-metal testing)
 - **GUI installer no longer freezes at the admin-password step.** Root cause
   was a pre-existing kernel bug (present since 1.0.0): a process that `fork()`s

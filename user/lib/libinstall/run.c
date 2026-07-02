@@ -13,6 +13,7 @@ int install_run_all(const char *devname, uint64_t disk_blocks,
                     uint32_t block_size,
                     const char *username,
                     const char *user_hash,
+                    const char *admin_hash,
                     install_progress_t *p)
 {
     if (!devname || !username || !user_hash) {
@@ -39,7 +40,7 @@ int install_run_all(const char *devname, uint64_t disk_blocks,
     /* 3. Write credentials */
     if (p && p->on_step)
         p->on_step("Writing user accounts", p->ctx);
-    if (install_write_credentials(username, user_hash) < 0) {
+    if (install_write_credentials(username, user_hash, admin_hash) < 0) {
         report_err(p, "write /etc/passwd failed");
         return -1;
     }
