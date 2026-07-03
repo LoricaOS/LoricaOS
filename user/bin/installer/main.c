@@ -120,33 +120,34 @@ static int collect_credentials(char *username, int username_sz,
                                char *admin_hash, int admin_hash_sz)
 {
     char pw[64], confirm[64];
+    int rc = -1;
 
     printf("\n--- Create your account ---\n");
     printf("This user is uid 0 — the first user. LoricaOS has no separate root;\n");
     printf("admin actions are authorized by the admin password (sudo-style).\n");
     if (read_line("Username: ", username, username_sz) == 0) {
         printf("ERROR: username cannot be empty\n");
-        return -1;
+        goto out;
     }
     if (!install_username_valid(username)) {
         printf("ERROR: username must be a-z/0-9/_/- (max 31, start a-z or _)\n");
-        return -1;
+        goto out;
     }
     if (read_password("Password: ", pw, sizeof(pw)) == 0) {
         printf("ERROR: password cannot be empty\n");
-        return -1;
+        goto out;
     }
     if (read_password("Confirm password: ", confirm, sizeof(confirm)) == 0) {
         printf("ERROR: confirmation failed\n");
-        return -1;
+        goto out;
     }
     if (strcmp(pw, confirm) != 0) {
         printf("ERROR: passwords do not match\n");
-        return -1;
+        goto out;
     }
     if (install_hash_password(pw, user_hash, user_hash_sz) < 0) {
         printf("ERROR: crypt() failed\n");
-        return -1;
+        goto out;
     }
 
     /* Optional separate admin password (changeable later with `adminpw`). */
@@ -160,11 +161,11 @@ static int collect_credentials(char *username, int username_sz,
                           confirm, sizeof(confirm)) == 0 ||
             strcmp(pw, confirm) != 0) {
             printf("ERROR: admin passwords do not match\n");
-            return -1;
+            goto out;
         }
         if (install_hash_password(pw, admin_hash, admin_hash_sz) < 0) {
             printf("ERROR: crypt() failed\n");
-            return -1;
+            goto out;
         }
         printf("Separate admin password configured.\n");
     } else {
@@ -172,7 +173,12 @@ static int collect_credentials(char *username, int username_sz,
     }
 
     printf("User '%s' configured (uid 0).\n", username);
-    return 0;
+    rc = 0;
+out:
+    /* Don't leave plaintext passwords on the stack after we return. */
+    memset(pw, 0, sizeof(pw));
+    memset(confirm, 0, sizeof(confirm));
+    return rc;
 }
 
 /* ── Main ───────────────────────────────────────────────────────────── */
