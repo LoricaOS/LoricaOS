@@ -44,6 +44,46 @@ log "== lumen / bastion / citadel-dock =="
 ( cd /root/citadel-dock && "$W" -O2 -Wall -Itoolkit/include -o dock.elf \
       $(ls /root/citadel-dock/src/*.c 2>/dev/null || ls /root/citadel-dock/*.c) $GUILIBS )
 
+# 2b. Build every app (same toolkit). /apps apps → /apps/<id>/<id> + app.ini +
+#     icon; the applications menu is a /bin binary. Each app repo lives at
+#     /root/<repo> (mirror from the Mac).
+stage_toolkit() {   # <repo-dir>
+    rm -rf "$1/toolkit"; mkdir -p "$1/toolkit/lib" "$1/toolkit/include"
+    cp "$GLYPH"/libglyph.a "$GLYPH"/libcitadel.a "$GLYPH"/libaudio.a "$GLYPH"/libauth.a "$1/toolkit/lib/"
+    cp "$GLYPH"/lib/glyph/*.h "$GLYPH"/lib/citadel/*.h "$GLYPH"/lib/audio/*.h "$GLYPH"/lib/libauth/*.h "$1/toolkit/include/"
+}
+APP_REPOS="lumen-terminal lumen-calculator lumen-editor lumen-filemanager \
+    lumen-settings lumen-sysmon lumen-netman lumen-calendar lumen-imageviewer \
+    lumen-tunes lumen-run lumen-feeds lumen-2048 lumen-snake lumen-minesweeper"
+app_ok=0
+for app in $APP_REPOS; do
+    R="/root/$app"; [ -d "$R" ] || { log "SKIP $app (not mirrored)"; continue; }
+    stage_toolkit "$R"
+    if ! ( cd "$R" && "$W" -O2 -Wall -Itoolkit/include -o component.elf src/*.c $GUILIBS ) 2>"/tmp/app-$app.err"; then
+        log "SKIP $app (build failed; /tmp/app-$app.err)"; continue
+    fi
+    appdir=$(ls -d "$R"/pkg/apps/*/ 2>/dev/null | head -1); id=$(basename "$appdir")
+    mkdir -p "$STAGE/apps/$id"
+    cp "$R/component.elf" "$STAGE/apps/$id/$id"; "$STRIP" -s "$STAGE/apps/$id/$id"; chmod 0755 "$STAGE/apps/$id/$id"
+    cp "$appdir/app.ini"  "$STAGE/apps/$id/" 2>/dev/null || true
+    cp "$appdir/icon.png" "$STAGE/apps/$id/" 2>/dev/null || true
+    cp "$R/pkg/etc/aegis/caps.d/$id" "$STAGE/etc/aegis/caps.d/" 2>/dev/null || true
+    app_ok=$((app_ok+1))
+done
+# applications menu → /bin/applications
+if [ -d /root/lumen-applications-menu ]; then
+    stage_toolkit /root/lumen-applications-menu
+    if ( cd /root/lumen-applications-menu && "$W" -O2 -Wall -Itoolkit/include -o component.elf src/*.c $GUILIBS ) 2>/tmp/app-applications.err; then
+        cp /root/lumen-applications-menu/component.elf "$STAGE/bin/applications"
+        "$STRIP" -s "$STAGE/bin/applications"; chmod 0755 "$STAGE/bin/applications"
+        cp /root/lumen-applications-menu/pkg/etc/aegis/caps.d/applications "$STAGE/etc/aegis/caps.d/" 2>/dev/null || true
+        app_ok=$((app_ok+1))
+    else
+        log "SKIP applications-menu (build failed)"
+    fi
+fi
+log "apps built + installed: $app_ok"
+
 # 3. Overlay the desktop onto the server staging.
 log "== overlay desktop =="
 install_bin(){ cp "$1" "$STAGE/bin/$2"; "$STRIP" -s "$STAGE/bin/$2"; chmod 0755 "$STAGE/bin/$2"; }
