@@ -510,6 +510,18 @@ static void prog_on_error(const char *msg, void *ctx)
      * below turns into install_failed = 1. */
 }
 
+/* Zero every plaintext password held in the wizard state. The hashes
+ * (user_hash/admin_hash) are what the install and later elevation use; the
+ * cleartext fields have no reason to outlive the step that consumed them. */
+static void wipe_secrets(void)
+{
+    memset(g_st.user_pw,           0, sizeof(g_st.user_pw));
+    memset(g_st.user_pw_confirm,   0, sizeof(g_st.user_pw_confirm));
+    memset(g_st.admin_new_pw,      0, sizeof(g_st.admin_new_pw));
+    memset(g_st.admin_new_confirm, 0, sizeof(g_st.admin_new_confirm));
+    memset(g_st.admin_pw,          0, sizeof(g_st.admin_pw));
+}
+
 static void run_install(void)
 {
     if (s_install_started) return;
@@ -524,6 +536,7 @@ static void run_install(void)
                  "failed to hash password");
         dprintf(2, "[INSTALLER] error=%s\n", g_st.progress_error);
         g_st.install_failed = 1;
+        wipe_secrets();
         return;
     }
     g_st.admin_hash[0] = '\0';
@@ -535,8 +548,11 @@ static void run_install(void)
                  "failed to hash admin password");
         dprintf(2, "[INSTALLER] error=%s\n", g_st.progress_error);
         g_st.install_failed = 1;
+        wipe_secrets();
         return;
     }
+    /* Cleartext no longer needed — the hashes carry the rest of the install. */
+    wipe_secrets();
 
     install_progress_t p = {
         .on_step     = prog_on_step,
@@ -627,12 +643,14 @@ static void handle_key_welcome(char c)
             dprintf(2, "[INSTALLER] elevate failed\n");
             /* Clear the field so a retry starts clean (a startup focus race
              * with the lumen-probe window can deliver a partial password). */
-            g_st.admin_pw[0] = '\0';
+            memset(g_st.admin_pw, 0, sizeof(g_st.admin_pw));
             g_st.dirty = 1;
             return;
         }
         g_st.validation_error[0] = '\0';
         dprintf(2, "[INSTALLER] elevated\n");
+        /* Elevation consumed the admin password; don't keep it in memory. */
+        memset(g_st.admin_pw, 0, sizeof(g_st.admin_pw));
         g_st.screen = SCREEN_DISK;
         dprintf(2, "[INSTALLER] screen=2\n");
         g_st.dirty = 1;

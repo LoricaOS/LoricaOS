@@ -2,9 +2,12 @@
 
 ## 1.1.0 — UNRELEASED (running)
 
-> **Status: not released.** Held for a Claude Fable 5 code-review pass
-> (re-released 2026-07-01) — expect additional revisions, likely including deep
-> security fixes, before this ships. This file is the running record of every
+> **Status: not released.** The Claude Fable 5 security review is **done**
+> (2026-07-02) — it found no security regressions across the elevation
+> boundary, the memfd COW-on-fork fix, or the perf fast paths; the one real
+> bug it surfaced (the NVMe low-MDTS regression below) is fixed. What remains
+> before shipping is the mechanical publish sequence (version bumps + releases,
+> see "Pending" at the bottom). This file is the running record of every
 > 1.0.0 → 1.1.0 change; keep appending as work lands.
 >
 > 1.1.0 started as a GUI/userland depth pass across the Lumen ecosystem
@@ -115,6 +118,21 @@
   termination (silent kills were undiagnosable).
 - Verified end-to-end on CT117: both installers complete a real NVMe write and
   the installed disk boots to the greeter/login under OVMF.
+
+### Security review follow-ups (2026-07-02 — Fable 5)
+- **NVMe install fixed on low-MDTS controllers (kernel, aegis `3819f8b`).** The
+  performance pass raised whole-disk copies and ext2 run reads to 64 KiB
+  transfers, but the driver rejects any command over the controller's MDTS
+  limit. On a controller whose MDTS clamps below 64 KiB (or the single-page
+  bounce fallback), the install died with `EIO` — a regression from the perf
+  pass (the old 4 KiB transfers always fit). `nvme_blkdev_read/write` now split
+  large transfers into per-command chunks internally, so no block caller needs
+  to know MDTS. Fails safe either way (clean error, never corruption).
+- **Installers now zero password buffers.** The CLI and GUI installers left
+  plaintext account/admin passwords on the stack / in wizard state after use;
+  both now wipe them once hashed/consumed (matching `adminpw`). Low severity —
+  single-user install-time tools with no exfiltration path — but tidied for a
+  security-branded release.
 
 ### Beautification pass (2026-07-02 — glyph + lumen + apps)
 - **Anti-aliased rendering primitives** (glyph): filled circles, rounded-rect
@@ -232,7 +250,9 @@ by one large read that reaches the device as one command.
 ---
 
 ### Pending before release
-- [ ] **Claude Fable 5 code review** — security pass; fold in resulting fixes here.
+- [x] **Claude Fable 5 code review** — security pass DONE (2026-07-02); no
+      regressions found. Fixes folded in: NVMe low-MDTS chunking + installer
+      password zeroing (see "Security review follow-ups" above).
 - [ ] Bump **glyph → 1.1.0** and cut its toolkit release.
 - [ ] Bump `GLYPH_VERSION → 1.1.0` on components that use new glyph APIs:
       citadel-dock, lumen-calculator, lumen-filemanager, lumen-editor,
@@ -244,7 +264,8 @@ by one large read that reaches the device as one command.
       1.0.1 or fold into 1.1.0 — decide at publish.
 - [ ] Re-cut + publish the herald `.hpkg`s to Chancery (green-light gated;
       scrub the signing key after).
-- [ ] **Publish the new Aegis kernel release** (perf pass `fe028c4`) and bump
+- [ ] **Publish the new Aegis kernel release** (perf pass `fe028c4` + memfd
+      fork fix `23f2f35` + NVMe low-MDTS fix `3819f8b`) and bump
       `KERNEL_VERSION` — fetch-kernel.sh still pins the pre-pass 1.0.0
       artifact; until the release is cut, builds only get the new kernel via
       the local vendor/ cache.
