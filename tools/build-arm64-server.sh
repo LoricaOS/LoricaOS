@@ -86,6 +86,22 @@ if [ -n "$li_objs" ]; then
     done
 fi
 
+# 2c. herald — on-device package manager. Static (bearssl linked in; curl is
+#     forked at runtime). Built for aarch64 with HERALD_ARCH=arm64 so it fetches
+#     the arm64 slice (binary-arm64) of a Chancery multi-arch repo.
+log "== herald =="
+BEARSSL_A64="$REPO/build/bearssl-install-arm64"
+[ -f "$REPO/build/herald-keys/trusted_key.h" ] || bash "$REPO/tools/herald-keygen.sh" >/dev/null 2>&1 || true
+[ -f "$BEARSSL_A64/lib/libbearssl.a" ] || \
+    REPO="$REPO" SUFFIX=-arm64 CC="$CC" AR=aarch64-linux-gnu-ar bash "$REPO/tools/build-bearssl.sh" >/dev/null 2>&1 || true
+if make -C "$REPO/user/bin/herald" CC="$CC" BEARSSL="$BEARSSL_A64" \
+        KEYDIR="$REPO/build/herald-keys" HERALD_ARCH=arm64 herald.elf >/tmp/arm64-herald.err 2>&1; then
+    cp "$REPO/user/bin/herald/herald.elf" "$BLOBS/herald.bin"; "$STRIP" -s "$BLOBS/herald.bin"
+    log "built herald (arm64, HERALD_ARCH=arm64)"
+else
+    log "SKIP herald (see /tmp/arm64-herald.err)"
+fi
+
 # 3. coreutils — cross-compile every util under $COREUTILS/src/<name>/ with the
 #    aarch64 musl wrapper (the Makefile's per-dir loop, but arch-retargeted).
 log "== coreutils =="
@@ -125,6 +141,7 @@ for t in "${SIMPLE_TOOLS[@]}" "${INSTALL_TOOLS[@]}"; do
     [ -f "$BLOBS/$t.bin" ] && cp "$BLOBS/$t.bin" "$STAGE/bin/$t"
 done
 [ -f "$BLOBS/sh.bin" ] && cp "$BLOBS/sh.bin" "$STAGE/bin/sh"
+[ -f "$BLOBS/herald.bin" ] && cp "$BLOBS/herald.bin" "$STAGE/bin/herald"
 # 4d. coreutils → /bin.
 cp "$CU_OUT"/* "$STAGE/bin/" 2>/dev/null || true
 # 4e. home dir for the live user.
