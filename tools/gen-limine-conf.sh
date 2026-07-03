@@ -6,7 +6,7 @@
 # grub-test.cfg, grub-installer-test.cfg, grub-installed.cfg). The modes differ
 # only in: timeout, which kernel partition the loader reads (the boot media for
 # live ISOs vs the installed ext2 root by GPT GUID), whether the rootfs/esp
-# ramdisks are passed as multiboot2 modules, and the kernel cmdline.
+# ramdisks are passed as Limine protocol modules, and the kernel cmdline.
 #
 # Usage: gen-limine-conf.sh <mode>
 #   live            aegis.iso              graphical default; graphical/text/debug; modules
@@ -14,9 +14,11 @@
 #   installer-test  aegis-installer-test.iso  single graphical autologin entry; timeout 0; modules
 #   installed       esp.img (on-disk ESP)  graphical/text/debug; kernel from ext2 by GUID; NO modules
 #
-# The kernel is multiboot2 and unchanged; Limine passes modules in config order
-# (first = rootfs/ramdisk0, second = esp/ramdisk1) and a 32bpp linear
-# framebuffer via the multiboot2 framebuffer tag — so there is no gfxmode to set.
+# The kernel boots via the Limine protocol (its primary path since the boot
+# rework; the multiboot2 header is kept only as a microvm/GRUB fallback). Limine
+# passes the rootfs/esp as protocol modules in config order (first =
+# ramdisk0/rootfs, second = ramdisk1/esp) and a 32bpp linear framebuffer via the
+# framebuffer request — so there is no gfxmode to set.
 set -eu
 
 mode="${1:?usage: gen-limine-conf.sh <live|test|installer-test|installed>}"
@@ -57,7 +59,7 @@ case "$mode" in
         TIMEOUT=3
         LIVE_ARG=""
         ;;
-    test|installer-test|dltest|perfbench|selftest|infer)
+    test|installer-test|dltest|perfbench|selftest|infer|soak)
         WITH_MODULES=1
         TIMEOUT=0
         LIVE_ARG=" aegis_live=1"
@@ -70,7 +72,7 @@ esac
 
 emit_entry() {  # $1 = title, $2 = cmdline
     printf '/%s\n' "$1"
-    printf '    protocol: multiboot2\n'
+    printf '    protocol: limine\n'
     printf '    path: %s\n' "$KPATH"
     if [ "$WITH_MODULES" = 1 ]; then
         printf '    module_path: boot():/boot/rootfs.img\n'
@@ -94,6 +96,13 @@ case "$mode" in
         ;;
     test)
         emit_entry "LoricaOS (test)" "boot=text quiet$LIVE_ARG"
+        ;;
+    soak)
+        # Graphical stability soak: production graphical config, passwordless
+        # autologin (so the compositor actually starts, unattended), and the
+        # `stresssoak` token that starts the stresstest vigil service.
+        emit_entry "LoricaOS (soak)" \
+            "boot=graphical quiet bastion_autologin=live stresssoak$LIVE_ARG"
         ;;
     installer-test)
         emit_entry "LoricaOS (installer-test)" "boot=graphical quiet bastion_autologin=root$LIVE_ARG"

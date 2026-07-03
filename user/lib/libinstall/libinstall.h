@@ -95,6 +95,13 @@ int install_hash_password(const char *password, char *out, int outsz);
  * Returns 1 if valid, 0 otherwise. */
 int install_username_valid(const char *username);
 
+/* Create a user's home directory: mkdir /home (if needed) and `home`, then
+ * chown it to uid:gid. Idempotent if the home already exists. One shared home-
+ * creation policy for the installer (primary user) and useradd (additional
+ * users) — LoricaOS always creates a home when an account is created. Returns
+ * 0 on success, -1 on failure. */
+int install_make_home(const char *home, int uid, int gid);
+
 /* Write /etc/passwd, /etc/shadow, /etc/group and the /etc/aegis/admin
  * elevation credential on the currently mounted rootfs for the single
  * primary user. LoricaOS has no "root": that user IS uid 0 (uid 0 is just

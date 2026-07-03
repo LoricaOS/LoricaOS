@@ -130,6 +130,8 @@ user/bin/shutdown/shutdown.elf  /bin/shutdown
 user/bin/reboot/reboot.elf      /bin/reboot
 user/bin/aegisctl/aegisctl.elf  /bin/aegisctl
 user/bin/adminpw/adminpw.elf    /bin/adminpw
+user/bin/useradd/useradd.elf    /bin/useradd
+user/bin/stresstest/stresstest.elf  /bin/stresstest
 user/bin/rune                   /bin/rune
 
 # The Ladybird-engine browser bundle (/lib/ladybird) is NOT baked into the base
