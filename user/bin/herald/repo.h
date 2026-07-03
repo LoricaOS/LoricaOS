@@ -3,8 +3,12 @@
 #include <stddef.h>
 
 /* herald's architecture (the only one it can install). Carried in Packages so
- * a multi-arch repo serves the right binaries. */
+ * a multi-arch repo serves the right binaries. Build-time overridable
+ * (-DHERALD_ARCH='"arm64"') so the same client cross-compiles per arch; the
+ * string must match the package manifests' `arch` and Chancery's binary-<arch>. */
+#ifndef HERALD_ARCH
 #define HERALD_ARCH       "x86_64"
+#endif
 #define HERALD_SOURCES    "/etc/herald/sources.list"
 #define HERALD_LISTS_DIR  "/var/lib/herald/lists"
 
