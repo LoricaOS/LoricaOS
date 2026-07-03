@@ -45,11 +45,23 @@ SYSROOT_USR="$SYSROOT/usr"
 CC_WRAPPER="$SYSROOT/bin/aarch64-musl-gcc"
 BLOB_OUT="$REPO/build/blobs-arm64"
 
-# Cross toolchain programs (must be on PATH)
-CROSS_CC="aarch64-elf-gcc"
-CROSS_AR="aarch64-elf-ar"
-CROSS_RANLIB="aarch64-elf-ranlib"
-CROSS_STRIP="aarch64-elf-strip"
+# Cross toolchain prefix. Prefer the bare-metal aarch64-elf toolchain (Homebrew
+# on macOS); fall back to the Linux-hosted aarch64-linux-gnu cross (Debian:
+# gcc-aarch64-linux-gnu) — the same toolchain the kernel's Makefile.arm64 uses,
+# so this builds on the CT117 build host too. Override with ARM64_CROSS=<prefix->.
+if [ -n "${ARM64_CROSS:-}" ]; then
+    CROSS="$ARM64_CROSS"
+elif command -v aarch64-elf-gcc >/dev/null 2>&1; then
+    CROSS="aarch64-elf-"
+elif command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
+    CROSS="aarch64-linux-gnu-"
+else
+    CROSS="aarch64-elf-"   # let check_toolchain print the install hint
+fi
+CROSS_CC="${CROSS}gcc"
+CROSS_AR="${CROSS}ar"
+CROSS_RANLIB="${CROSS}ranlib"
+CROSS_STRIP="${CROSS}strip"
 
 log() { echo "[build-arm64-userland] $*"; }
 
@@ -57,12 +69,13 @@ check_toolchain() {
     for bin in "$CROSS_CC" "$CROSS_AR" "$CROSS_RANLIB" "$CROSS_STRIP"; do
         if ! command -v "$bin" >/dev/null 2>&1; then
             echo "error: $bin not on PATH" >&2
-            echo "Install aarch64-elf-gcc (Homebrew: \`brew install aarch64-elf-gcc\`," >&2
-            echo "Debian/Ubuntu: \`apt install gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu\`" >&2
-            echo "— if using Linux gnu-ld, adjust CROSS_* vars in this script)." >&2
+            echo "Install a cross toolchain (Homebrew: \`brew install aarch64-elf-gcc\`," >&2
+            echo "Debian/Ubuntu: \`apt install gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu\`)." >&2
+            echo "Auto-detected prefix: $CROSS  (override with ARM64_CROSS=<prefix->)." >&2
             exit 1
         fi
     done
+    log "toolchain: ${CROSS}gcc"
 }
 
 build_musl_sysroot() {
