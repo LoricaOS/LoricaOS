@@ -24,6 +24,13 @@
   with live prefs, a **Tunes** music-player redesign, an **Image Viewer** that
   pages through folders and rotates.
 - Every app now has a real icon; package apps ship their own.
+- **Accounts & sessions**: add users on a running system with `useradd` (home
+  created automatically), and the graphical session now opens terminals in your
+  home directory instead of `/`.
+- **x86 boots via the Limine protocol** now (the kernel's primary path), not the
+  legacy multiboot2 fallback.
+- **Fixed a rare whole-system freeze** on multicore machines under heavy desktop
+  use (an SMP TLB-shootdown deadlock in the AF_UNIX socket path).
 - **Global performance pass** (kernel + compositor + installer + boot): NVMe
   moves 128 KiB per command instead of 4 KiB, sequential file reads issue ~16x
   fewer device commands, mmap faults read ahead 16 pages, TCP sends full-size
@@ -133,6 +140,49 @@
   both now wipe them once hashed/consumed (matching `adminpw`). Low severity —
   single-user install-time tools with no exfiltration path — but tidied for a
   security-branded release.
+
+### Stability (2026-07-02 — graphical soak)
+- **Fixed a whole-system SMP deadlock under desktop load (kernel, aegis
+  `bfc21fe`).** `unix_socket.c` freed socket ring buffers with `kva_free_pages`
+  — which the performance pass made issue a synchronous cross-CPU TLB shootdown
+  — *while holding `unix_lock` with interrupts disabled*. On a multicore
+  machine this deadlocks: the freeing CPU spins (IRQs off) waiting for every
+  core to ACK the shootdown IPI, while another core spins for `unix_lock` in
+  `unix_sock_read` (also IRQs off) and so can never ACK it. The whole machine
+  wedges — no panic, no log. It needs several cores **plus** the compositor's
+  AF_UNIX client churn **plus** concurrent address-space frees to trigger, so
+  it was invisible to single-CPU tests and only bit multicore bare metal under
+  GUI load. Found and fixed via a new graphical **soak harness** (`stresstest`
+  + a `soak` ISO: 12 GB, 4 CPUs, 10 min of GUI-app/memfd/fork/socket churn),
+  which reproduced it deterministically (hard hang <10s) and then ran clean for
+  the full 10 minutes with the fix. All four ring-free sites now drop
+  `unix_lock` before freeing.
+
+### Boot protocol & user accounts (2026-07-02 — bare-metal testing)
+- **x86 now boots via the Limine protocol** (`tools/gen-limine-conf.sh`:
+  `protocol: multiboot2` → `protocol: limine` on every entry). The kernel
+  switched its primary boot path to the Limine protocol, and its own smoke ISOs
+  use it, but the OS boot config had never been updated — so bare metal was
+  still entering through the legacy 32-bit multiboot2 header. The OS now boots
+  on the kernel's primary, tested path (modules + framebuffer come through the
+  Limine requests). The multiboot2 header stays as the microvm/GRUB fallback.
+  Unblocks the higher-half direct map (HHDM) the kernel already requests.
+- **Graphical sessions start in the user's home.** The Bastion greeter set
+  `$HOME` but never `chdir`'d to it (unlike the text-console `login`), so the
+  whole GUI session — and every terminal Lumen launched — inherited init's cwd
+  of `/`. Bastion now `chdir`s to the authenticated user's home, so terminals
+  and file pickers open in `$HOME`.
+- **New `/bin/useradd`** — create additional login accounts on a running
+  system: `useradd [-m|-M] [-s <shell>] <username>`. Assigns the next free uid
+  at/above 1000 in a private group, prompts for a password (crypt SHA-512),
+  appends `/etc/passwd`/`/etc/shadow`/`/etc/group`, and creates the home by
+  default. Being a privileged action with no ambient root, it first demands the
+  admin credential via `login -elevate` (the caps it needs — `AUTH` to write
+  shadow, `SETUID` to chown the home — are granted to any authenticated
+  session, so the elevation check is the real gate). caps.d: `admin AUTH SETUID`.
+- **Home directory always created with the account.** Home creation is now one
+  shared `install_make_home()` in libinstall, used by both the installer (the
+  primary uid-0 user) and `useradd` — so any account creation makes its home.
 
 ### Beautification pass (2026-07-02 — glyph + lumen + apps)
 - **Anti-aliased rendering primitives** (glyph): filled circles, rounded-rect
@@ -265,7 +315,7 @@ by one large read that reaches the device as one command.
 - [ ] Re-cut + publish the herald `.hpkg`s to Chancery (green-light gated;
       scrub the signing key after).
 - [ ] **Publish the new Aegis kernel release** (perf pass `fe028c4` + memfd
-      fork fix `23f2f35` + NVMe low-MDTS fix `3819f8b`) and bump
-      `KERNEL_VERSION` — fetch-kernel.sh still pins the pre-pass 1.0.0
+      fork fix `23f2f35` + NVMe low-MDTS fix `3819f8b` + AF_UNIX SMP
+      deadlock fix `bfc21fe`) and bump `KERNEL_VERSION` — fetch-kernel.sh still pins the pre-pass 1.0.0
       artifact; until the release is cut, builds only get the new kernel via
       the local vendor/ cache.

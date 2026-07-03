@@ -1,6 +1,7 @@
 /* credentials.c — password hash + /etc/passwd writer (libinstall) */
 #include "libinstall.h"
 #include <crypt.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -167,11 +168,23 @@ int install_write_credentials(const char *username,
      * directory and anything writing to $HOME fails with ENOENT. */
     {
         char home[80];
-        mkdir("/home", 0755);                       /* may already exist */
         snprintf(home, sizeof(home), "/home/%s", username);
-        mkdir(home, 0755);
-        chown(home, 0, 0);
+        install_make_home(home, 0, 0);
     }
 
+    return 0;
+}
+
+/* ── Public: install_make_home ──────────────────────────────────────── */
+
+int install_make_home(const char *home, int uid, int gid)
+{
+    if (!home || !home[0])
+        return -1;
+    mkdir("/home", 0755);                       /* parent; may already exist */
+    if (mkdir(home, 0755) != 0 && errno != EEXIST)
+        return -1;
+    if (chown(home, uid, gid) != 0)
+        return -1;
     return 0;
 }

@@ -23,7 +23,7 @@ ROOTFS_SERVER  = $(BUILD)/rootfs-server.img
 CXX_AEGIS       = /opt/aegis-cxx/bin/x86_64-buildroot-linux-musl-g++
 CXX_FLAGS_AEGIS = -static -O2 -std=c++23 -fno-pie -no-pie
 
-.PHONY: all iso desktop-iso server-iso selftest-iso rootfs build-musl test clean version curl_bin
+.PHONY: all iso desktop-iso server-iso selftest-iso soak-iso rootfs build-musl test clean version curl_bin
 all: iso
 
 # ── Kernel artifact: fetched, not built ─────────────────────────────────────
@@ -53,7 +53,7 @@ build-musl: $(MUSL_BUILT)
 SIMPLE_USER_PROGS = \
     shutdown reboot aegisctl login stsh httpd sshd nettest polltest poll-test sockreftest contresume spawnleak \
     hostname ip \
-    smpstress futexstress mmfaultstress elffuzz sysfuzz fduaf blkuaf extabtest vforkstress dltest captest cowtest \
+    smpstress futexstress mmfaultstress elffuzz sysfuzz fduaf blkuaf extabtest vforkstress dltest captest cowtest stresstest \
     perfbench-ipc forkbench selftest
 
 # Generate rules: user/bin/foo/foo.elf depends on musl AND its own sources,
@@ -158,6 +158,9 @@ user/bin/installer/installer.elf: user/bin/installer/main.c user/lib/libinstall/
 
 user/bin/adminpw/adminpw.elf: user/bin/adminpw/main.c user/lib/libinstall/libinstall.a $(MUSL_BUILT)
 	$(MAKE) -C user/bin/adminpw
+
+user/bin/useradd/useradd.elf: user/bin/useradd/main.c user/lib/libinstall/libinstall.a $(MUSL_BUILT)
+	$(MAKE) -C user/bin/useradd
 
 user/bin/gui-installer/gui-installer.elf: user/bin/gui-installer/main.c user/lib/glyph/libglyph.a user/lib/libinstall/libinstall.a $(MUSL_BUILT)
 	$(MAKE) -C user/bin/gui-installer
@@ -281,6 +284,13 @@ iso: desktop-iso server-iso
 $(BUILD)/loricaos-test.iso: $(KERNEL_STRIPPED) $(ROOTFS_DESKTOP) $(ESP_DESKTOP) $(LIMINE_BIN) tools/gen-limine-conf.sh
 	$(call LIMINE_ISO_RULE,$@,$(BUILD)/selftest-isodir,selftest,$(ROOTFS_DESKTOP),$(ESP_DESKTOP))
 selftest-iso: $(BUILD)/loricaos-test.iso
+
+# Graphical stability soak ISO: desktop image, kernel cmdline `stresssoak` +
+# boot=graphical, so vigil auto-runs /bin/stresstest inside a real graphical
+# session. Auto-boots (timeout 0). Not a release artifact — a soak harness.
+$(BUILD)/loricaos-soak.iso: $(KERNEL_STRIPPED) $(ROOTFS_DESKTOP) $(ESP_DESKTOP) $(LIMINE_BIN) tools/gen-limine-conf.sh
+	$(call LIMINE_ISO_RULE,$@,$(BUILD)/soak-isodir,soak,$(ROOTFS_DESKTOP),$(ESP_DESKTOP))
+soak-iso: $(BUILD)/loricaos-soak.iso
 
 # Manifest + skeleton sources, per layer. A rootfs rebuilds when any binary it
 # packs OR any skeleton file (cap policies, vigil services, /etc) changes.
