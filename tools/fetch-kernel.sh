@@ -2,18 +2,28 @@
 # Fetch the Aegis kernel image LoricaOS is built against.
 #
 # Resolution order:
-#   1. local cache  vendor/aegis-<version>.elf   (committed or pre-populated)
-#   2. download     <release URL>/v<version>/aegis.elf
+#   1. local cache  vendor/aegis[-arm64]-<version>.elf   (committed or pre-populated)
+#   2. download     <release URL>/v<version>/aegis[-arm64].elf
 #
 # The kernel is a versioned ARTIFACT — LoricaOS does not build it. OS and kernel
 # versions move independently; this is the single point that couples them.
+#
+# The 3rd arg (or $ARCH) selects the arch: x86_64 (default) → aegis.elf,
+# arm64/aarch64 → aegis-arm64.elf. Each arch is a separate release artifact.
 set -eu
 
-VER="${1:?usage: fetch-kernel.sh <version> <dest-path>}"
-DEST="${2:?usage: fetch-kernel.sh <version> <dest-path>}"
+VER="${1:?usage: fetch-kernel.sh <version> <dest-path> [arch]}"
+DEST="${2:?usage: fetch-kernel.sh <version> <dest-path> [arch]}"
+ARCH="${3:-${ARCH:-x86_64}}"
 
-CACHE="vendor/aegis-${VER}.elf"
-URL="https://github.com/LoricaOS/Aegis/releases/download/v${VER}/aegis.elf"
+case "$ARCH" in
+    arm64|aarch64) SUFFIX="-arm64" ;;
+    x86_64|amd64|"") SUFFIX="" ;;
+    *) echo "[fetch-kernel] ERROR: unknown arch '$ARCH'" >&2; exit 1 ;;
+esac
+
+CACHE="vendor/aegis${SUFFIX}-${VER}.elf"
+URL="https://github.com/LoricaOS/Aegis/releases/download/v${VER}/aegis${SUFFIX}.elf"
 
 mkdir -p vendor "$(dirname "$DEST")"
 
