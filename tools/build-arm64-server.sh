@@ -45,7 +45,9 @@ bash tools/build-arm64-userland.sh >/dev/null
 log "== base admin tools =="
 # NOTE: 'shell' (user/bin/shell → /bin/sh) is built separately as sh.bin so it
 # does NOT clobber stsh's shell.bin blob (both would otherwise be shell.bin).
-SIMPLE_TOOLS=(vigictl hostname reboot shutdown aegisctl adminpw useradd chronos)
+SIMPLE_TOOLS=(vigictl hostname reboot shutdown aegisctl chronos ip dhcp httpd)
+# Tools that need libinstall.a (+ its header) — built after it below.
+INSTALL_TOOLS=(adminpw useradd)
 for t in "${SIMPLE_TOOLS[@]}"; do
     src="$REPO/user/bin/$t/main.c"
     [ -f "$src" ] || { log "SKIP $t (no main.c)"; continue; }
@@ -60,6 +62,28 @@ if "$CC" -O2 -Wall -o "$BLOBS/sh.bin" "$REPO/user/bin/shell/main.c" 2>/tmp/arm64
     "$STRIP" -s "$BLOBS/sh.bin"; log "built sh"
 else
     log "SKIP sh (compile failed)"
+fi
+
+# libinstall.a + tools that use it (adminpw, useradd). crypt() is in musl's libc.
+LI_DIR="$REPO/user/lib/libinstall"
+LI_LIB="$BLOBS/libinstall.a"
+li_objs=""
+for f in config copy credentials gpt install_elevate run; do
+    if "$CC" -c -O2 -I"$LI_DIR" -o "/tmp/li-$f.o" "$LI_DIR/$f.c" 2>"/tmp/arm64-li-$f.err"; then
+        li_objs="$li_objs /tmp/li-$f.o"
+    else
+        log "libinstall: $f.c failed (see /tmp/arm64-li-$f.err)"
+    fi
+done
+if [ -n "$li_objs" ]; then
+    aarch64-linux-gnu-ar rcs "$LI_LIB" $li_objs && log "built libinstall.a"
+    for t in "${INSTALL_TOOLS[@]}"; do
+        if "$CC" -O2 -Wall -I"$LI_DIR" -o "$BLOBS/$t.bin" "$REPO/user/bin/$t/main.c" "$LI_LIB" 2>"/tmp/arm64-$t.err"; then
+            "$STRIP" -s "$BLOBS/$t.bin"; log "built $t"
+        else
+            log "SKIP $t (see /tmp/arm64-$t.err)"
+        fi
+    done
 fi
 
 # 3. coreutils — cross-compile every util under $COREUTILS/src/<name>/ with the
@@ -97,7 +121,7 @@ fi
 cp "$BLOBS/vigil.bin"  "$STAGE/bin/vigil"
 cp "$BLOBS/login.bin"  "$STAGE/bin/login"
 cp "$BLOBS/shell.bin"  "$STAGE/bin/stsh"   # 'shell' blob == stsh (interactive)
-for t in "${SIMPLE_TOOLS[@]}"; do
+for t in "${SIMPLE_TOOLS[@]}" "${INSTALL_TOOLS[@]}"; do
     [ -f "$BLOBS/$t.bin" ] && cp "$BLOBS/$t.bin" "$STAGE/bin/$t"
 done
 [ -f "$BLOBS/sh.bin" ] && cp "$BLOBS/sh.bin" "$STAGE/bin/sh"
