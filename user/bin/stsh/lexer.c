@@ -1,210 +1,103 @@
 #include "stsh.h"
 
 /*
- * lexer.c — quote-aware tokenizer + word expansion for stsh.
+ * lexer.c — structural tokenizer for stsh.
  *
- * Replaces the old flat, quote-blind parser. Produces a token stream where
- * WORD tokens are already fully expanded and unquoted; the parser (run.c)
- * only groups tokens into pipelines and and-or lists.
- *
- * Handled here: single quotes (literal), double quotes (expand, keep spaces),
- * backslash escapes, $VAR / ${VAR} / $? / $# / $@ / $* / $$ / $0..$9,
- * command substitution $(...) and `...`, operators (| || & && ; < > >> 2> 2>&1),
- * and # comments.
- *
- * ponytail: NO field-splitting of unquoted expansions and NO globbing yet —
- * a var holding spaces stays one word; `*.c` is literal. Both land in Layer 2
- * (control-flow pass), where the recursive parser + glob() belong.
+ * Splits raw shell text into a token stream. WORD tokens carry the RAW word
+ * text (quotes and $-constructs preserved verbatim); expansion happens later,
+ * at execution time (run.c), so a loop body re-expands its variables on every
+ * iteration. Newlines are significant tokens (statement separators / construct
+ * boundaries). Reserved words (if/for/while/case/{/}/…) are just WORD tokens
+ * that the parser recognizes by text.
  */
 
-/* positional-parameter state lives in run.c */
-extern const char *g_arg0;
-extern char       *g_params[];
-extern int         g_nparams;
-
-/* ── arena append helpers ── */
-
-static void
-emit(char *a, int *used, int cap, char c)
-{
-    if (*used < cap - 1)
-        a[(*used)++] = c;
-}
-
-static void
-emit_str(char *a, int *used, int cap, const char *s)
-{
-    while (s && *s)
-        emit(a, used, cap, *s++);
-}
-
-static int is_name_start(char c){ return c == '_' || (c>='a'&&c<='z') || (c>='A'&&c<='Z'); }
-static int is_name(char c){ return is_name_start(c) || (c>='0'&&c<='9'); }
-
-/*
- * expand_dollar — handle one $-expansion starting at *pp (which points at '$').
- * Appends the result to the arena and advances *pp past the construct.
- */
-static void
-expand_dollar(const char **pp, char *a, int *used, int cap)
-{
-    const char *p = *pp + 1;   /* skip '$' */
-    char c = *p;
-    char tmp[32];
-
-    if (c == '?') {
-        snprintf(tmp, sizeof tmp, "%d", g_last_exit);
-        emit_str(a, used, cap, tmp); p++;
-    } else if (c == '$') {
-        snprintf(tmp, sizeof tmp, "%d", (int)getpid());
-        emit_str(a, used, cap, tmp); p++;
-    } else if (c == '#') {
-        snprintf(tmp, sizeof tmp, "%d", g_nparams);
-        emit_str(a, used, cap, tmp); p++;
-    } else if (c == '@' || c == '*') {
-        for (int i = 0; i < g_nparams; i++) {
-            if (i) emit(a, used, cap, ' ');
-            emit_str(a, used, cap, g_params[i]);
-        }
-        p++;
-    } else if (c >= '0' && c <= '9') {
-        int idx = c - '0';
-        const char *v = (idx == 0) ? (g_arg0 ? g_arg0 : "")
-                      : (idx <= g_nparams ? g_params[idx - 1] : "");
-        emit_str(a, used, cap, v); p++;
-    } else if (c == '(') {
-        /* $(...) command substitution — find matching ) honoring nesting */
-        p++;
-        const char *start = p;
-        int depth = 1;
-        while (*p && depth) {
-            if (*p == '(') depth++;
-            else if (*p == ')') { if (--depth == 0) break; }
-            p++;
-        }
-        int len = (int)(p - start);
-        char cmd[LINE_SIZE];
-        if (len > (int)sizeof(cmd) - 1) len = sizeof(cmd) - 1;
-        memcpy(cmd, start, len); cmd[len] = '\0';
-        if (*p == ')') p++;
-        sh_capture(cmd, a, used, cap);
-    } else if (c == '{') {
-        p++;
-        char name[128]; int n = 0;
-        while (*p && *p != '}' && n < (int)sizeof(name) - 1) name[n++] = *p++;
-        name[n] = '\0';
-        if (*p == '}') p++;
-        emit_str(a, used, cap, env_get(name));
-    } else if (is_name_start(c)) {
-        char name[128]; int n = 0;
-        while (is_name(*p) && n < (int)sizeof(name) - 1) name[n++] = *p++;
-        name[n] = '\0';
-        emit_str(a, used, cap, env_get(name));
-    } else {
-        emit(a, used, cap, '$');   /* bare $ */
-    }
-    *pp = p;
-}
-
-/* backtick command substitution: `...` (no nesting, POSIX-simple) */
-static void
-expand_backtick(const char **pp, char *a, int *used, int cap)
-{
-    const char *p = *pp + 1;   /* skip ` */
-    const char *start = p;
-    while (*p && *p != '`') p++;
-    int len = (int)(p - start);
-    char cmd[LINE_SIZE];
-    if (len > (int)sizeof(cmd) - 1) len = sizeof(cmd) - 1;
-    memcpy(cmd, start, len); cmd[len] = '\0';
-    if (*p == '`') p++;
-    sh_capture(cmd, a, used, cap);
-    *pp = p;
-}
-
-/* Word-terminating (unquoted) metacharacters. */
-static int
-is_meta(char c)
-{
-    return c==' '||c=='\t'||c=='\n'||c=='|'||c=='&'||c==';'||c=='<'||c=='>';
-}
-
-/*
- * lex_word — read one word starting at *pp into the arena, fully expanded and
- * unquoted. Returns the arena offset of the word's first char (NUL-terminated),
- * advances *pp past the word.
- */
+/* Copy one raw word (verbatim, quotes preserved) up to an unquoted
+ * metacharacter or whitespace. */
 static char *
 lex_word(const char **pp, char *a, int *used, int cap)
 {
     int start = *used;
     const char *p = *pp;
+#define PUT(c) do { if (*used < cap - 1) a[(*used)++] = (c); } while (0)
 
-    while (*p && !is_meta(*p)) {
+    while (*p) {
         char c = *p;
-        if (c == '\'') {                       /* single quote: literal */
-            p++;
-            while (*p && *p != '\'') emit(a, used, cap, *p++);
-            if (*p == '\'') p++;
-        } else if (c == '"') {                 /* double quote: expand, keep spaces */
-            p++;
+        if (c==' '||c=='\t'||c=='\n') break;
+        if (c=='|'||c=='&'||c==';'||c=='<'||c=='>'||c=='('||c==')') break;
+
+        if (c == '\'') {                       /* single quotes: verbatim */
+            PUT(c); p++;
+            while (*p && *p != '\'') { PUT(*p); p++; }
+            if (*p) { PUT(*p); p++; }
+        } else if (c == '"') {                 /* double quotes: verbatim (with \) */
+            PUT(c); p++;
             while (*p && *p != '"') {
-                if (*p == '$') expand_dollar(&p, a, used, cap);
-                else if (*p == '`') expand_backtick(&p, a, used, cap);
-                else if (*p == '\\' && (p[1]=='"'||p[1]=='\\'||p[1]=='$'||p[1]=='`')) {
-                    emit(a, used, cap, p[1]); p += 2;
-                } else emit(a, used, cap, *p++);
+                if (*p=='\\' && p[1]) { PUT(*p); PUT(p[1]); p += 2; continue; }
+                PUT(*p); p++;
             }
-            if (*p == '"') p++;
-        } else if (c == '\\') {                /* backslash escape */
-            if (p[1]) { emit(a, used, cap, p[1]); p += 2; }
-            else p++;
-        } else if (c == '$') {
-            expand_dollar(&p, a, used, cap);
-        } else if (c == '`') {
-            expand_backtick(&p, a, used, cap);
+            if (*p) { PUT(*p); p++; }
+        } else if (c == '`') {                 /* backticks: verbatim */
+            PUT(c); p++;
+            while (*p && *p != '`') { PUT(*p); p++; }
+            if (*p) { PUT(*p); p++; }
+        } else if (c == '$' && p[1] == '(') {  /* $( ... ) balanced, verbatim */
+            PUT(c); PUT('('); p += 2;
+            int depth = 1;
+            while (*p && depth) {
+                if (*p == '(') depth++;
+                else if (*p == ')') { depth--; if (!depth) { PUT(*p); p++; break; } }
+                PUT(*p); p++;
+            }
+        } else if (c == '\\') {                /* escape: keep backslash + char */
+            PUT(c); if (p[1]) { PUT(p[1]); p += 2; } else p++;
         } else {
-            emit(a, used, cap, c); p++;
+            PUT(c); p++;
         }
     }
-    emit(a, used, cap, '\0');
+    PUT('\0');
+#undef PUT
     *pp = p;
     return &a[start];
 }
 
 int
-tokenize(const char *line, tok_t *toks, int maxtoks, char *arena, int arenalen)
+tokenize(const char *text, tok_t *toks, int maxtoks, char *arena, int arenalen)
 {
     int nt = 0, used = 0;
-    const char *p = line;
+    const char *p = text;
 
-#define PUSHOP(tt, adv) do { \
+#define OP(tt, adv) do { \
         if (nt >= maxtoks - 1) return -1; \
         toks[nt].type = (tt); toks[nt].text = NULL; nt++; p += (adv); \
     } while (0)
 
     while (*p) {
         while (*p == ' ' || *p == '\t') p++;
-        if (!*p || *p == '\n' || *p == '#') break;   /* # starts a comment */
-
+        if (!*p) break;
         char c = *p;
-        if (c == '|')      { if (p[1]=='|') PUSHOP(T_OR,2);  else PUSHOP(T_PIPE,1); }
-        else if (c == '&') { if (p[1]=='&') PUSHOP(T_AND,2); else PUSHOP(T_AMP,1); }
-        else if (c == ';') { PUSHOP(T_SEMI,1); }
-        else if (c == '<') { PUSHOP(T_LT,1); }
-        else if (c == '>') { if (p[1]=='>') PUSHOP(T_GTGT,2); else PUSHOP(T_GT,1); }
-        else if (c == '2' && p[1] == '>') {
-            if (p[2]=='&' && p[3]=='1') PUSHOP(T_2GT1,4);
-            else                        PUSHOP(T_2GT,2);
-        } else {
-            if (nt >= maxtoks - 1) return -1;
-            toks[nt].type = T_WORD;
-            toks[nt].text = lex_word(&p, arena, &used, arenalen);
-            nt++;
-            if (used >= arenalen - 1) return -1;
+
+        if (c == '#') { while (*p && *p != '\n') p++; continue; }  /* comment to EOL */
+        if (c == '\n') { OP(T_NEWLINE, 1); continue; }
+        if (c == '|')  { if (p[1]=='|') OP(T_OR,2);   else OP(T_PIPE,1);  continue; }
+        if (c == '&')  { if (p[1]=='&') OP(T_AND,2);  else OP(T_AMP,1);   continue; }
+        if (c == ';')  { OP(T_SEMI,1);  continue; }
+        if (c == '(')  { OP(T_LPAREN,1); continue; }
+        if (c == ')')  { OP(T_RPAREN,1); continue; }
+        if (c == '<')  { if (p[1]=='<') OP(T_DLESS,2); else OP(T_LT,1); continue; }
+        if (c == '>')  { if (p[1]=='>') OP(T_GTGT,2);  else OP(T_GT,1);  continue; }
+        if (c == '2' && p[1] == '>') {
+            if (p[2]=='&' && p[3]=='1') OP(T_DGTAMP,4);
+            else                        OP(T_DGT,2);
+            continue;
         }
+        /* word */
+        if (nt >= maxtoks - 1) return -1;
+        toks[nt].type = T_WORD;
+        toks[nt].text = lex_word(&p, arena, &used, arenalen);
+        nt++;
+        if (used >= arenalen - 1) return -1;
     }
-#undef PUSHOP
+#undef OP
     toks[nt].type = T_EOF;
     toks[nt].text = NULL;
     return nt;
