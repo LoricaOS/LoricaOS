@@ -120,6 +120,19 @@ run_pipeline(cmd_t *cmds, int n, char **envp, int *last_exit)
                 close(fd);
             }
 
+            /* 2>file */
+            if (cmds[i].stderr_file) {
+                int fd = open(cmds[i].stderr_file,
+                              O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                if (fd < 0) {
+                    fprintf(stderr, "%s: cannot open for writing\n",
+                            cmds[i].stderr_file);
+                    _exit(1);
+                }
+                dup2(fd, STDERR_FILENO);
+                close(fd);
+            }
+
             /* 2>&1 */
             if (cmds[i].stderr_to_stdout)
                 dup2(STDOUT_FILENO, STDERR_FILENO);
@@ -227,6 +240,11 @@ run_pipeline_bg(cmd_t *cmds, int n, char **envp)
                 flags |= cmds[i].stdout_append ? O_APPEND : O_TRUNC;
                 int fd = open(cmds[i].stdout_file, flags, 0644);
                 if (fd >= 0) { dup2(fd, STDOUT_FILENO); close(fd); }
+            }
+            if (cmds[i].stderr_file) {
+                int fd = open(cmds[i].stderr_file,
+                              O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                if (fd >= 0) { dup2(fd, STDERR_FILENO); close(fd); }
             }
             if (cmds[i].stderr_to_stdout)
                 dup2(STDOUT_FILENO, STDERR_FILENO);
