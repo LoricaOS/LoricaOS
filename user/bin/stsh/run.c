@@ -550,6 +550,7 @@ redir_apply(cmd_t *c, int saved[3])
         saved[2]=dup(2); dup2(fd,2); close(fd);
     }
     if (c->stderr_to_stdout) { saved[2]=dup(2); dup2(1,2); }
+    if (c->stdout_dup_to) { if(saved[1]<0)saved[1]=dup(1); dup2(c->stdout_dup_to,1); }  /* >&N */
     return 0;
 }
 
@@ -584,6 +585,7 @@ run_simple(int *pi, int run)
         else if (tt==T_GTGT)    { if(T[i+1].type==T_WORD){cmd.stdout_file=T[i+1].text;cmd.stdout_append=1;i+=2;}else i++; }
         else if (tt==T_DGT)     { if(T[i+1].type==T_WORD){cmd.stderr_file=T[i+1].text;i+=2;}else i++; }
         else if (tt==T_DGTAMP)  { cmd.stderr_to_stdout=1; i++; }
+        else if (tt==T_GTAMP)   { if(T[i+1].type==T_WORD){cmd.stdout_dup_to=atoi(T[i+1].text);i+=2;}else i++; }
         else break;   /* separator/pipe/paren ends the command */
     }
     *pi = i;
@@ -905,6 +907,7 @@ run_pipeline_node(int *pi, int run, int in_loop)
             else if (tt==T_GTGT){ if(T[i+1].type==T_WORD){cmd.stdout_file=T[i+1].text;cmd.stdout_append=1;i+=2;}else i++; }
             else if (tt==T_DGT){ if(T[i+1].type==T_WORD){cmd.stderr_file=T[i+1].text;i+=2;}else i++; }
             else if (tt==T_DGTAMP){ cmd.stderr_to_stdout=1; i++; }
+            else if (tt==T_GTAMP){ if(T[i+1].type==T_WORD){cmd.stdout_dup_to=atoi(T[i+1].text);i+=2;}else i++; }
             else break;
         }
         if (nc==0 && T[i].type!=T_PIPE) { /* single stage — delegate to run_simple for builtins/functions */

@@ -47,13 +47,14 @@ typedef struct {
     int   stdout_append;      /* 1 if >> (append), 0 if > (truncate) */
     char *stderr_file;        /* path for 2> redirect, NULL if none */
     int   stderr_to_stdout;   /* 1 if 2>&1 was specified */
+    int   stdout_dup_to;      /* target fd for >&N (0 = none) */
 } cmd_t;
 
 /* ── lexer.c ── */
 
 typedef enum {
     T_WORD, T_PIPE, T_AND, T_OR, T_SEMI, T_AMP,
-    T_LT, T_GT, T_GTGT, T_DGT, T_DGTAMP, T_DLESS,
+    T_LT, T_GT, T_GTGT, T_DGT, T_DGTAMP, T_GTAMP, T_DLESS,
     T_LPAREN, T_RPAREN, T_NEWLINE, T_EOF
 } toktype_t;
 
