@@ -11,7 +11,9 @@
 #include <time.h>
 #include <stdio.h>
 
-#define VIGIL_MAX_SERVICES  16
+/* Base skeleton + desktop overlay already total ~18 service dirs; 16 silently
+ * dropped the overflow (readdir-last services never started). */
+#define VIGIL_MAX_SERVICES  32
 #define VIGIL_CMD_PATH      "/run/vigil.cmd"
 #define VIGIL_SERVICES_DIR  "/etc/vigil/services"
 #define VIGIL_PID_PATH      "/run/vigil.pid"
@@ -84,7 +86,10 @@ read_file(const char *path, char *buf, int bufsz)
 static void
 load_service(const char *name)
 {
-    if (s_nsvc >= VIGIL_MAX_SERVICES) return;
+    if (s_nsvc >= VIGIL_MAX_SERVICES) {
+        vigil_log(name);   /* don't drop a service silently */
+        return;
+    }
     service_t *s = &s_svcs[s_nsvc];
     memset(s, 0, sizeof(*s));
     /* Use memcpy after bounding to avoid -Wstringop-truncation on strncpy */
