@@ -46,7 +46,15 @@
   static libs (avformat/avcodec/swscale/swresample), decode-only, x86 SIMD +
   pthreads on. Cross-parametrized (CC/ARCH/SUFFIX) for the arm64 port later.
 - `user/bin/ffsmoke` (+ vigil `ffsmoke` service, `make ffsmoke-iso` /
-  `ffsmoke-test`): demux → threaded H.264 decode → swscale to RGB on Aegis.
+  `ffsmoke-test`): one boot exercises both stages — demux → threaded H.264
+  decode → swscale to RGB (verified on a 1080p clip), and decode AAC →
+  swresample → `/dev/audio` while sampling the A/V playback clock.
+- **A/V playback clock (kernel + libaudio).** `sys_audio_position` (syscall
+  505) reports the milliseconds of audio actually played on `/dev/audio`
+  (LPIB-derived — what's audible, not merely buffered), the master clock a
+  video player syncs frames to. libaudio gains a streaming interface
+  (`audio_stream_open`/`write`/`position_ms`/`close`) for callers that decode
+  and resample themselves.
 
 ### Compositor & window management (lumen)
 - Window **minimize** + push the live window list to the dock (taskbar protocol).
