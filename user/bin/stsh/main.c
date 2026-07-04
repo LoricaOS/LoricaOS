@@ -94,43 +94,40 @@ main(int argc, char **argv, char **envp)
      * scraping the prompt itself (which has no trailing newline). */
     dprintf(2, "[STSH] ready\n");
 
-    /* REPL */
+    /* REPL — accumulates multi-line compound commands (if/for/while/case, open
+     * quotes, trailing backslash) until the input is syntactically complete. */
+    static char acc[1 << 16];
+    int acc_len = 0;
     for (;;) {
         char prompt[512];
 
-        /* Reap finished background jobs (`cmd &`).  The Aegis kernel does
-         * NOT auto-reap when SIGCHLD is SIG_IGN, so without this sweep
-         * each background job leaves a zombie holding a task slot and a
-         * MAX_PROCESSES slot until the shell exits. */
-        while (waitpid(-1, NULL, WNOHANG) > 0)
+        while (waitpid(-1, NULL, WNOHANG) > 0)   /* reap background jobs */
             ;
 
-        build_prompt(prompt, sizeof(prompt));
+        if (acc_len == 0)
+            build_prompt(prompt, sizeof(prompt));
+        else
+            snprintf(prompt, sizeof(prompt), "> ");   /* continuation prompt */
 
         int rlen = editor_readline(prompt, line, sizeof(line));
-        if (rlen < 0)
-            break; /* EOF */
-        if (rlen == 0)
-            continue; /* empty or Ctrl-C */
+        if (rlen < 0) break;                     /* EOF */
+        if (rlen == 0 && acc_len == 0) continue; /* empty or Ctrl-C at top */
 
-        /* Skip blank lines */
-        {
-            int blank = 1;
-            for (int i = 0; line[i]; i++) {
-                if (line[i] != ' ' && line[i] != '\t') {
-                    blank = 0;
-                    break;
-                }
-            }
-            if (blank)
-                continue;
+        /* append this line (+ newline) to the accumulator */
+        int add = (int)strlen(line);
+        if (acc_len + add + 2 < (int)sizeof(acc)) {
+            memcpy(acc + acc_len, line, add); acc_len += add;
+            acc[acc_len++] = '\n'; acc[acc_len] = '\0';
         }
 
-        hist_add(line);
+        if (sh_incomplete(acc))
+            continue;                            /* keep reading */
 
-        /* Tokenize (quote-aware, with expansion) and run the whole line as a
-         * ;/&&/||/| list — all handled inside run_line. */
-        run_line(line);
+        if (acc[0] && acc_len > 1) {
+            hist_add(acc);
+            run_program(acc);
+        }
+        acc_len = 0; acc[0] = '\0';
     }
 
     hist_save();

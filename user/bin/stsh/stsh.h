@@ -53,30 +53,33 @@ typedef struct {
 
 typedef enum {
     T_WORD, T_PIPE, T_AND, T_OR, T_SEMI, T_AMP,
-    T_LT, T_GT, T_GTGT, T_2GT, T_2GT1, T_EOF
+    T_LT, T_GT, T_GTGT, T_DGT, T_DGTAMP, T_DLESS,
+    T_LPAREN, T_RPAREN, T_NEWLINE, T_EOF
 } toktype_t;
 
 typedef struct {
     toktype_t type;
-    char     *text;   /* WORD tokens only: expanded/unquoted string in arena */
+    char     *text;   /* WORD tokens: RAW (unexpanded, still-quoted) word text */
 } tok_t;
 
-/* Tokenize + expand one input line. Returns token count (T_EOF appended), or
- * -1 on arena/token overflow. Words are expanded (vars, $(...), quotes) into
- * `arena`; operator tokens have text=NULL. */
-int tokenize(const char *line, tok_t *toks, int maxtoks, char *arena, int arenalen);
+/* Structural tokenizer: splits raw text into tokens WITHOUT expanding words
+ * (expansion is deferred to execution time in run.c so loop bodies re-expand
+ * each pass). Returns token count (T_EOF appended), or -1 on overflow. */
+int tokenize(const char *text, tok_t *toks, int maxtoks, char *arena, int arenalen);
 
-/* Run `cmd` and append its stdout (trailing newlines stripped) to arena — the
- * $(...) / backtick capture primitive. Defined in run.c (needs run_line). */
-void sh_capture(const char *cmd, char *arena, int *used, int cap);
+/* Run `cmd` and append its stdout (trailing newlines stripped) to a buffer —
+ * the $(...) / backtick capture primitive. Defined in run.c. */
+void sh_capture(const char *cmd, char *buf, int *used, int cap);
 
 /* ── run.c ── */
 
 extern int g_last_exit;
 
 void run_set_params(const char *arg0, char **params, int nparams);
-int  run_line(const char *line);                 /* execute a full line (;/&&/|| list) */
+int  run_program(const char *text);              /* lex+parse+exec a whole program */
+int  run_line(const char *line);                 /* alias for run_program */
 int  run_script(const char *path, char **argv_from, int argc_from);
+int  sh_incomplete(const char *buf);             /* interactive: needs more input? */
 
 /* ── env.c ── */
 
