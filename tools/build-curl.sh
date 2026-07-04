@@ -1,12 +1,20 @@
 #!/bin/bash
-# tools/build-curl.sh — configure and compile curl with BearSSL
+# tools/build-curl.sh — configure and compile curl with BearSSL.
+# Cross-parametrizable: set CC/HOST/BEARSSL_INSTALL/STRIP/SUFFIX to build for
+# another arch (arm64: CC=<aarch64 musl gcc> HOST=aarch64-linux-musl
+# BEARSSL_INSTALL=.../bearssl-install-arm64 STRIP=aarch64-linux-gnu-strip
+# SUFFIX=-arm64 → build/curl-arm64/curl). herald forks /bin/curl for network.
 set -e
 
-REPO="$(git rev-parse --show-toplevel)"
-BEARSSL_INSTALL="$REPO/build/bearssl-install"
+REPO="${REPO:-$(git rev-parse --show-toplevel)}"
+CC="${CC:-musl-gcc}"
+HOST="${HOST:-x86_64-linux-musl}"
+STRIP="${STRIP:-strip}"
+SUFFIX="${SUFFIX:-}"
+BEARSSL_INSTALL="${BEARSSL_INSTALL:-$REPO/build/bearssl-install}"
 CURL_SRC="$REPO/references/curl"
-BUILD_DIR="$REPO/build/curl-build"
-OUT="$REPO/build/curl"
+BUILD_DIR="$REPO/build/curl-build${SUFFIX}"
+OUT="$REPO/build/curl${SUFFIX}"
 
 # Fetch the curl source if it isn't vendored yet.
 [ -f "$CURL_SRC/configure" ] || bash "$REPO/tools/fetch-curl.sh"
@@ -16,13 +24,13 @@ mkdir -p "$BUILD_DIR" "$OUT"
 cd "$BUILD_DIR"
 
 "$CURL_SRC/configure" \
-  CC="musl-gcc" \
+  CC="$CC" \
   CFLAGS="-O2 -fno-pie" \
   LDFLAGS="-static -no-pie -L$BEARSSL_INSTALL/lib -L$BEARSSL_INSTALL/lib64" \
   PKG_CONFIG="" \
   --srcdir="$CURL_SRC" \
   --prefix="$OUT/install" \
-  --host=x86_64-linux-musl \
+  --host=$HOST \
   --disable-shared \
   --enable-static \
   --without-openssl \
@@ -63,5 +71,5 @@ if [ ! -f src/curl ]; then
 fi
 
 cp src/curl "$OUT/curl"
-strip "$OUT/curl"
+"$STRIP" "$OUT/curl"
 echo "[curl] built: $OUT/curl ($(du -sh "$OUT/curl" | cut -f1)), $(file -b "$OUT/curl" | cut -d, -f1)"
