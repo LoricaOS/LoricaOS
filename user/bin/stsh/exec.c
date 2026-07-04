@@ -17,7 +17,11 @@ static void
 exec_cmd(cmd_t *cmd, char **envp)
 {
     char full[256];
-    if (cmd->argv[0][0] != '/') {
+    if (strchr(cmd->argv[0], '/') != NULL) {
+        /* Contains a slash → it's a pathname (absolute or relative to cwd),
+         * e.g. /bin/tcc or ./hello. Exec it as-is, no PATH/bundle lookup. */
+        execve(cmd->argv[0], cmd->argv, envp);
+    } else {
         snprintf(full, sizeof(full), "/bin/%s", cmd->argv[0]);
         execve(full, cmd->argv, envp);
         /* Bare name not in /bin: try the system app-bundle tree, so
@@ -28,8 +32,6 @@ exec_cmd(cmd_t *cmd, char **envp)
                      cmd->argv[0], cmd->argv[0]);
             execve(full, cmd->argv, envp);
         }
-    } else {
-        execve(cmd->argv[0], cmd->argv, envp);
     }
     /* execve returned — print errno so the user knows whether it was
      * ENOENT, EACCES, ENOEXEC, EAGAIN (process limit), etc.  Without
@@ -136,6 +138,10 @@ run_pipeline(cmd_t *cmds, int n, char **envp, int *last_exit)
             /* 2>&1 */
             if (cmds[i].stderr_to_stdout)
                 dup2(STDOUT_FILENO, STDERR_FILENO);
+
+            /* >&N — dup stdout to another fd (e.g. >&2) */
+            if (cmds[i].stdout_dup_to)
+                dup2(cmds[i].stdout_dup_to, STDOUT_FILENO);
 
             /* Close all pipe fds in child */
             for (j = 0; j < n - 1; j++) {
@@ -248,6 +254,8 @@ run_pipeline_bg(cmd_t *cmds, int n, char **envp)
             }
             if (cmds[i].stderr_to_stdout)
                 dup2(STDOUT_FILENO, STDERR_FILENO);
+            if (cmds[i].stdout_dup_to)
+                dup2(cmds[i].stdout_dup_to, STDOUT_FILENO);
 
             for (j = 0; j < n - 1; j++) {
                 close(pipes[j][0]);

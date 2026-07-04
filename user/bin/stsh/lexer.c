@@ -84,7 +84,7 @@ tokenize(const char *text, tok_t *toks, int maxtoks, char *arena, int arenalen)
         if (c == '(')  { OP(T_LPAREN,1); continue; }
         if (c == ')')  { OP(T_RPAREN,1); continue; }
         if (c == '<')  { if (p[1]=='<') OP(T_DLESS,2); else OP(T_LT,1); continue; }
-        if (c == '>')  { if (p[1]=='>') OP(T_GTGT,2);  else OP(T_GT,1);  continue; }
+        if (c == '>')  { if (p[1]=='>') OP(T_GTGT,2); else if (p[1]=='&') OP(T_GTAMP,2); else OP(T_GT,1); continue; }
         if (c == '2' && p[1] == '>') {
             if (p[2]=='&' && p[3]=='1') OP(T_DGTAMP,4);
             else                        OP(T_DGT,2);
