@@ -40,9 +40,6 @@ int
 main(int argc, char **argv, char **envp)
 {
     char line[LINE_SIZE];
-    char expanded[LINE_SIZE];
-    cmd_t cmds[MAX_PIPELINE];
-    int last_exit = 0;
 
     /* Initialize environment */
     env_init(envp);
@@ -57,36 +54,20 @@ main(int argc, char **argv, char **envp)
     /* Initialize history (privileged = no disk persist) */
     hist_init(has_cap_delegate());
 
-    /* Handle -c command mode */
+    /* -c command mode: run the string. Per POSIX the first operand after the
+     * command_string is $0, and the rest are $1.. */
     if (argc >= 3 && strcmp(argv[1], "-c") == 0) {
-        strncpy(line, argv[2], sizeof(line) - 1);
-        line[sizeof(line) - 1] = '\0';
+        const char *a0     = (argc >= 4) ? argv[3] : argv[0];
+        char      **params = (argc >= 5) ? &argv[4] : NULL;
+        int         nparam = (argc >= 5) ? argc - 4 : 0;
+        run_set_params(a0, params, nparam);
+        return run_line(argv[2]);
+    }
 
-        env_expand(line, expanded, sizeof(expanded), last_exit);
-
-        int n = parse_pipeline(expanded, cmds, MAX_PIPELINE);
-        if (n == 0)
-            return 0;
-
-        /* Handle exec builtin */
-        if (n == 1 && strcmp(cmds[0].argv[0], "exec") == 0 &&
-            cmds[0].argv[1]) {
-            char full[256];
-            char *prog = cmds[0].argv[1];
-            char **exec_argv = &cmds[0].argv[1];
-            if (prog[0] != '/') {
-                snprintf(full, sizeof(full), "/bin/%s", prog);
-                execve(full, exec_argv, env_as_array());
-            } else {
-                execve(prog, exec_argv, env_as_array());
-            }
-            perror(prog);
-            return 127;
-        }
-
-        if (!try_builtin(cmds, n, &last_exit))
-            run_pipeline(cmds, n, env_as_array(), &last_exit);
-        return last_exit;
+    /* Script-file mode: `stsh FILE [args...]` — run the file as a shell script
+     * (this is what makes stsh usable as /bin/sh for `#!` shebangs). */
+    if (argc >= 2 && argv[1][0] != '-') {
+        return run_script(argv[1], &argv[2], argc - 2);
     }
 
     /* Display /etc/motd if it exists (login shell banner) */
@@ -147,42 +128,11 @@ main(int argc, char **argv, char **envp)
 
         hist_add(line);
 
-        /* Expand environment variables */
-        env_expand(line, expanded, sizeof(expanded), last_exit);
-
-        /* Handle semicolons for sequential commands */
-        char *rest = expanded;
-        while (rest && *rest) {
-            /* Find next semicolon (not inside quotes — v1 ignores quoting) */
-            char *semi = strchr(rest, ';');
-            if (semi)
-                *semi = '\0';
-
-            /* Strip leading whitespace */
-            while (*rest == ' ' || *rest == '\t') rest++;
-
-            if (*rest) {
-                /* Make a mutable copy for parse_pipeline (it modifies in place) */
-                char seg[LINE_SIZE];
-                strncpy(seg, rest, sizeof(seg) - 1);
-                seg[sizeof(seg) - 1] = '\0';
-
-                int bg = 0;
-                int n = parse_pipeline_bg(seg, cmds, MAX_PIPELINE, &bg);
-                if (n > 0) {
-                    if (!try_builtin(cmds, n, &last_exit)) {
-                        if (bg)
-                            run_pipeline_bg(cmds, n, env_as_array());
-                        else
-                            run_pipeline(cmds, n, env_as_array(), &last_exit);
-                    }
-                }
-            }
-
-            rest = semi ? semi + 1 : NULL;
-        }
+        /* Tokenize (quote-aware, with expansion) and run the whole line as a
+         * ;/&&/||/| list — all handled inside run_line. */
+        run_line(line);
     }
 
     hist_save();
-    return last_exit;
+    return g_last_exit;
 }
