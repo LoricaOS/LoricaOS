@@ -59,7 +59,7 @@ case "$mode" in
         TIMEOUT=3
         LIVE_ARG=""
         ;;
-    test|installer-test|dltest|perfbench|selftest|infer|soak|ffsmoke)
+    test|installer-test|dltest|perfbench|selftest|infer|soak|ffsmoke|videoplay)
         WITH_MODULES=1
         TIMEOUT=0
         LIVE_ARG=" aegis_live=1"
@@ -103,6 +103,12 @@ case "$mode" in
         # `stresssoak` token that starts the stresstest vigil service.
         emit_entry "LoricaOS (soak)" \
             "boot=graphical quiet bastion_autologin=live stresssoak$LIVE_ARG"
+        ;;
+    videoplay)
+        # Autoplay a test clip with lumen-video: graphical autologin + the
+        # `videoplay` token that fires the autoplay service (tools/video-iso.sh).
+        emit_entry "LoricaOS (video)" \
+            "boot=graphical quiet bastion_autologin=live videoplay$LIVE_ARG"
         ;;
     installer-test)
         emit_entry "LoricaOS (installer-test)" "boot=graphical quiet bastion_autologin=root$LIVE_ARG"
