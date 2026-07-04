@@ -59,7 +59,7 @@ case "$mode" in
         TIMEOUT=3
         LIVE_ARG=""
         ;;
-    test|installer-test|dltest|perfbench|selftest|infer|soak)
+    test|installer-test|dltest|perfbench|selftest|infer|soak|ffsmoke)
         WITH_MODULES=1
         TIMEOUT=0
         LIVE_ARG=" aegis_live=1"
@@ -115,6 +115,9 @@ case "$mode" in
         ;;
     selftest)
         emit_entry "LoricaOS (selftest)" "boot=text quiet selftest$LIVE_ARG"
+        ;;
+    ffsmoke)
+        emit_entry "LoricaOS (ffsmoke)" "boot=text quiet ffsmoke$LIVE_ARG"
         ;;
     infer)
         # No explicit boot= — exercises vigil's mode inference (graphical iff

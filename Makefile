@@ -23,7 +23,7 @@ ROOTFS_SERVER  = $(BUILD)/rootfs-server.img
 CXX_AEGIS       = /opt/aegis-cxx/bin/x86_64-buildroot-linux-musl-g++
 CXX_FLAGS_AEGIS = -static -O2 -std=c++23 -fno-pie -no-pie
 
-.PHONY: all iso desktop-iso server-iso selftest-iso soak-iso rootfs build-musl test clean version curl_bin
+.PHONY: all iso desktop-iso server-iso selftest-iso soak-iso ffsmoke-iso ffsmoke-test rootfs build-musl test clean version curl_bin
 all: iso
 
 # ── Kernel artifact: fetched, not built ─────────────────────────────────────
@@ -54,7 +54,7 @@ SIMPLE_USER_PROGS = \
     shutdown reboot aegisctl login stsh httpd sshd nettest polltest poll-test sockreftest contresume spawnleak \
     hostname ip \
     smpstress futexstress mmfaultstress elffuzz sysfuzz fduaf blkuaf extabtest vforkstress dltest captest cowtest stresstest \
-    perfbench-ipc forkbench selftest
+    perfbench-ipc forkbench selftest ffsmoke
 
 # Generate rules: user/bin/foo/foo.elf depends on musl AND its own sources,
 # so editing any .c/.h under user/bin/foo triggers a rebuild.  Without the
@@ -285,6 +285,13 @@ $(BUILD)/loricaos-test.iso: $(KERNEL_STRIPPED) $(ROOTFS_DESKTOP) $(ESP_DESKTOP) 
 	$(call LIMINE_ISO_RULE,$@,$(BUILD)/selftest-isodir,selftest,$(ROOTFS_DESKTOP),$(ESP_DESKTOP))
 selftest-iso: $(BUILD)/loricaos-test.iso
 
+# FFmpeg-port smoke ISO: server image (ffsmoke + its media live in the base
+# manifest), kernel cmdline `ffsmoke` so vigil decodes a real H.264 mp4 on
+# Aegis. Media + full run: tools/ffsmoke-test.sh. Not a release artifact.
+$(BUILD)/loricaos-ffsmoke.iso: $(KERNEL_STRIPPED) $(ROOTFS_SERVER) $(ESP_SERVER) $(LIMINE_BIN) tools/gen-limine-conf.sh
+	$(call LIMINE_ISO_RULE,$@,$(BUILD)/ffsmoke-isodir,ffsmoke,$(ROOTFS_SERVER),$(ESP_SERVER))
+ffsmoke-iso: $(BUILD)/loricaos-ffsmoke.iso
+
 # Graphical stability soak ISO: desktop image, kernel cmdline `stresssoak` +
 # boot=graphical, so vigil auto-runs /bin/stresstest inside a real graphical
 # session. Auto-boots (timeout 0). Not a release artifact — a soak harness.
@@ -342,6 +349,12 @@ test: desktop-iso server-iso $(BUILD)/loricaos-test.iso
 	bash tools/ostest.sh $(BUILD)/loricaos-desktop.iso
 	bash tools/servertest.sh $(BUILD)/loricaos-server.iso
 	bash tools/selftest.sh $(BUILD)/loricaos-test.iso
+
+# FFmpeg-port smoke: build the ffmpeg statics if needed, fetch a real H.264
+# mp4, boot the ffsmoke ISO, expect "[FFSMOKE] PASS" (demux + threaded H.264
+# decode + swscale on Aegis). Needs network for the one-time media fetch.
+ffsmoke-test:
+	bash tools/ffsmoke-test.sh
 
 version:
 	@echo "LoricaOS $(AEGIS_OS_VERSION) (kernel $(KERNEL_VERSION))"
