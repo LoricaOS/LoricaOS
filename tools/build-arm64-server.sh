@@ -102,6 +102,18 @@ else
     log "SKIP herald (see /tmp/arm64-herald.err)"
 fi
 
+# 2d. curl — herald's network transport (static aarch64 + bearssl-arm64). Cached
+#     build/curl-arm64/curl reused; else cross-built (autoconf, a few minutes).
+log "== curl =="
+if [ -f "$REPO/build/curl-arm64/curl" ] || \
+   REPO="$REPO" CC="$CC" HOST=aarch64-linux-musl BEARSSL_INSTALL="$BEARSSL_A64" \
+       STRIP=aarch64-linux-gnu-strip SUFFIX=-arm64 bash "$REPO/tools/build-curl.sh" >/tmp/arm64-curl.err 2>&1; then
+    cp "$REPO/build/curl-arm64/curl" "$BLOBS/curl.bin"; "$STRIP" -s "$BLOBS/curl.bin"
+    log "built curl (arm64)"
+else
+    log "SKIP curl (see /tmp/arm64-curl.err)"
+fi
+
 # 3. coreutils — cross-compile every util under $COREUTILS/src/<name>/ with the
 #    aarch64 musl wrapper (the Makefile's per-dir loop, but arch-retargeted).
 log "== coreutils =="
@@ -123,12 +135,15 @@ log "== rootfs staging =="
 rm -rf "$STAGE"; mkdir -p "$STAGE"/{bin,etc,home,dev,proc,tmp,run}
 # 4a. /etc skeleton from the repo (passwd/shadow/group, caps.d, vigil services).
 cp -a "$REPO/rootfs/etc/." "$STAGE/etc/"
+# Optional: override the herald repo URL at build time (e.g. a local test repo).
+[ -n "${HERALD_SOURCES:-}" ] && { mkdir -p "$STAGE/etc/herald"; echo "$HERALD_SOURCES" > "$STAGE/etc/herald/sources.list"; }
 cp -a "$REPO/rootfs/home/." "$STAGE/home/" 2>/dev/null || true
-# 4b. Prune dev/test vigil services — keep only getty (→ login) so boot is clean.
+# 4b. Prune dev/test vigil services — keep getty (→ login) + dhcp (→ networking,
+#     so the server gets an IP at boot; needed for herald remote fetch).
 if [ -d "$STAGE/etc/vigil/services" ]; then
     for s in "$STAGE/etc/vigil/services"/*/; do
         case "$(basename "$s")" in
-            getty) ;;                       # keep
+            getty|dhcp) ;;                  # keep
             *) rm -rf "$s" ;;               # drop dltest/smpstress/chronos/...
         esac
     done
@@ -142,6 +157,7 @@ for t in "${SIMPLE_TOOLS[@]}" "${INSTALL_TOOLS[@]}"; do
 done
 [ -f "$BLOBS/sh.bin" ] && cp "$BLOBS/sh.bin" "$STAGE/bin/sh"
 [ -f "$BLOBS/herald.bin" ] && cp "$BLOBS/herald.bin" "$STAGE/bin/herald"
+[ -f "$BLOBS/curl.bin" ] && cp "$BLOBS/curl.bin" "$STAGE/bin/curl"
 # 4d. coreutils → /bin.
 cp "$CU_OUT"/* "$STAGE/bin/" 2>/dev/null || true
 # 4e. home dir for the live user.
