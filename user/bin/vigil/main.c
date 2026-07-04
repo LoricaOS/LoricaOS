@@ -133,16 +133,22 @@ start_service(service_t *s)
     if (s->pid > 0) return;
     pid_t pid = fork();
     if (pid == 0) {
-        /* In quiet mode, close stdout for non-interactive services so daemon
-         * chatter doesn't pollute the serial stream (breaks test pattern
-         * matching).  Keep stderr open — services that need serial
-         * visibility (e.g. DHCP) can log via stderr/dprintf(2,...).
-         * Heuristic: close stdout if run_cmd is not /bin/login and not
-         * /bin/bastion (the two interactive auth services). */
+        /* In quiet mode, point stdout at /dev/null for non-interactive
+         * services so daemon chatter doesn't pollute the serial stream
+         * (breaks test pattern matching).  Keep stderr open — services that
+         * need serial visibility (e.g. DHCP) can log via stderr/dprintf.
+         * MUST reopen, never just close(1): with fd 1 free the service's
+         * next open() lands on fd 1, and stdio flushes then write into that
+         * file (this corrupted a media file before the kernel enforced fd
+         * access modes).
+         * Heuristic: not /bin/login and not /bin/bastion (the two
+         * interactive auth services). */
         if (s_quiet &&
             strcmp(s->run_cmd, "/bin/login") != 0 &&
-            strcmp(s->run_cmd, "/bin/bastion") != 0)
+            strcmp(s->run_cmd, "/bin/bastion") != 0) {
             close(1);
+            open("/dev/null", O_WRONLY);   /* lowest free fd → becomes 1 */
+        }
 
         /* Exec the binary directly when run_cmd is an absolute path — this
          * ensures exec_caps are applied to the target binary, not consumed

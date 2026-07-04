@@ -36,6 +36,17 @@
   fewer device commands, mmap faults read ahead 16 pages, TCP sends full-size
   segments, app frames no longer repaint the whole desktop, the idle desktop
   no longer wakes 60x/sec, and installs issue ~16x fewer I/O round-trips.
+- **FFmpeg ported** as the media engine (toward a native video player): a
+  trimmed static build (H.264/HEVC/VP9 + AAC/MP3/…, mp4/mkv/avi) that demuxes
+  and thread-decodes H.264 on Aegis, verified bit-exact against the same
+  decode on Linux. `make ffsmoke-test` is a permanent boot-and-decode gate.
+
+### Media engine (FFmpeg port)
+- `tools/fetch-ffmpeg.sh` + `tools/build-ffmpeg.sh`: FFmpeg 6.1.2 as trimmed
+  static libs (avformat/avcodec/swscale/swresample), decode-only, x86 SIMD +
+  pthreads on. Cross-parametrized (CC/ARCH/SUFFIX) for the arm64 port later.
+- `user/bin/ffsmoke` (+ vigil `ffsmoke` service, `make ffsmoke-iso` /
+  `ffsmoke-test`): demux → threaded H.264 decode → swscale to RGB on Aegis.
 
 ### Compositor & window management (lumen)
 - Window **minimize** + push the live window list to the dock (taskbar protocol).
@@ -140,6 +151,20 @@
   both now wipe them once hashed/consumed (matching `adminpw`). Low severity —
   single-user install-time tools with no exfiltration path — but tidied for a
   security-branded release.
+
+### Kernel: fd access-mode enforcement (2026-07-04 — found by the FFmpeg port)
+- **`sys_write` now enforces the fd's access mode (aegis).** A read-only fd
+  on a regular file was writable — the mode was checked only at `open()`
+  (capability-gated) and never at the write. Surfaced when a service's media
+  file, opened O_RDONLY, landed on the freed stdout fd and got overwritten by
+  a stdio flush. `sys_read`/`readv`/`pread64` reject O_WRONLY fds and
+  `sys_write`/`writev` reject O_RDONLY fds (`VFS_O_ACCMODE`); every
+  fd-creation site sets an honest mode (pipe ends, sockets, memfds, init's
+  0/1/2). No ambient authority: an fd carries exactly the direction it was
+  opened with. Fails closed (`EBADF`).
+- **vigil reopens stdout to `/dev/null`** instead of `close(1)` in quiet mode,
+  so a service's next `open()` can't inherit fd 1 (defense in depth alongside
+  the kernel fix).
 
 ### Stability (2026-07-02 — graphical soak)
 - **Fixed a whole-system SMP deadlock under desktop load (kernel, aegis
