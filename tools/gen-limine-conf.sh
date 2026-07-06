@@ -59,6 +59,16 @@ case "$mode" in
         TIMEOUT=0
         LIVE_ARG=""
         ;;
+    dev)
+        # Developer/profiling desktop ISO: graphical, NON-quiet (so vigil's
+        # [UBOOT] timeline + service logs reach the serial console). Autologin
+        # comes from /etc/aegis/autologin baked into the dev rootfs (AUTOLOGIN=),
+        # not the cmdline. aegis_live=1 keeps it live (installers/autologin not
+        # stripped). Built by `make desktop-dev-iso` — never a shipped artifact.
+        WITH_MODULES=1
+        TIMEOUT=0
+        LIVE_ARG=" aegis_live=1"
+        ;;
     test|installer-test|dltest|perfbench|selftest|infer|soak|ffsmoke|videoplay)
         WITH_MODULES=1
         TIMEOUT=0
@@ -96,6 +106,12 @@ case "$mode" in
         ;;
     test)
         emit_entry "LoricaOS (test)" "boot=text quiet$LIVE_ARG"
+        ;;
+    dev)
+        # NON-quiet so vigil's [UBOOT] timeline + service logs hit the serial
+        # console for boot profiling. Autologin comes from /etc/aegis/autologin
+        # in the dev rootfs (no bastion_autologin= cmdline, no test password).
+        emit_entry "LoricaOS (dev)" "boot=graphical$LIVE_ARG"
         ;;
     soak)
         # Graphical stability soak: production graphical config, passwordless
