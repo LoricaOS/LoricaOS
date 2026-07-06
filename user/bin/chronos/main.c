@@ -45,6 +45,17 @@ static int ntp_enabled(void)
 
 int main(void)
 {
+    /* Wait for the network before the first sync. DHCP writes /etc/resolv.conf
+     * immediately after it configures the interface + gateway (SYS_NETCFG), so
+     * the file's presence means a usable route exists. Firing an NTP request
+     * before then makes the kernel spend ~5s on a doomed ARP resolve and log a
+     * spurious "chronos: sendto failed" during boot. Bounded to ~30s so a box
+     * that never gets a lease still falls through to the normal 60s retry loop. */
+    for (int i = 0; i < 300 && access("/etc/resolv.conf", F_OK) != 0; i++) {
+        struct timespec w = { 0, 100 * 1000 * 1000 };  /* 100 ms */
+        nanosleep(&w, NULL);
+    }
+
     for (;;) {
         if (!ntp_enabled()) {
             sleep(60);            /* automatic time sync disabled */
