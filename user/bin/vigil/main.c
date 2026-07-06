@@ -49,13 +49,36 @@ struct linux_dirent64 {
     char               d_name[256];
 };
 
+/* Milliseconds since the monotonic clock started (~kernel boot), so vigil's
+ * timeline chains directly onto the kernel's [BOOT] number. */
+static unsigned long
+uboot_ms(void)
+{
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+        return 0;
+    return (unsigned long)ts.tv_sec * 1000UL + (unsigned long)(ts.tv_nsec / 1000000L);
+}
+
 static void
 vigil_log(const char *msg)
 {
     if (s_quiet) return;
-    write(1, "vigil: ", 7);
+    char ts[24];
+    int n = snprintf(ts, sizeof(ts), "[%lu ms] vigil: ", uboot_ms());
+    write(1, ts, (size_t)n);
     write(1, msg, strlen(msg));
     write(1, "\n", 1);
+}
+
+/* uboot_mark — a boot-profiling milestone that prints even under `quiet`, so a
+ * production graphical boot can still be timed. Tagged [UBOOT] for grepping. */
+static void
+uboot_mark(const char *phase)
+{
+    char b[96];
+    int n = snprintf(b, sizeof(b), "[UBOOT] %lu ms %s\n", uboot_ms(), phase);
+    write(1, b, (size_t)n);
 }
 
 static void handle_usr1(int sig) { (void)sig; s_got_usr1 = 1; }
@@ -286,6 +309,8 @@ main(void)
 {
     int is_live = 0;
 
+    uboot_mark("vigil-enter");   /* PID 1 reached user space */
+
     /* Set the OS hostname (the kernel default is the generic "aegis"). The OS
      * owns its own identity, so init sets it here — uname()/Settings/the shell
      * prompt all then report "loricaos". */
@@ -371,6 +396,8 @@ main(void)
         }
         start_service(&s_svcs[i]);
     }
+
+    uboot_mark("services-spawned");   /* all boot-mode services fork+exec'd */
 
     while (!s_got_term) {
         if (s_got_usr1) {
