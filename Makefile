@@ -279,17 +279,12 @@ desktop-iso: $(BUILD)/loricaos-desktop.iso
 server-iso:  $(BUILD)/loricaos-server.iso
 iso: desktop-iso server-iso
 
-# ── Developer / boot-profiling desktop ISO (NOT a shipped artifact) ───────────
-# Same desktop rootfs, but with /etc/aegis/autologin baked in (AUTOLOGIN=live)
-# and a NON-quiet cmdline (dev mode) so vigil's [UBOOT] timeline + service logs
-# reach the serial console. A real install STRIPS the autologin (vigil's first-
-# installed-boot cleanup), so installed systems are unaffected and force the
-# greeter. Build:  make desktop-dev-iso   (see docs/autologin.md)
-$(BUILD)/rootfs-desktop-dev.img: $(ROOTFS_SERVER) $(BUILD)/desktop-overlay.db user/bin/gui-installer/gui-installer.elf $(SKELETON_FILES_DESKTOP) tools/assemble-desktop-rootfs.sh
-	AUTOLOGIN=live bash tools/assemble-desktop-rootfs.sh $@
-
-$(BUILD)/loricaos-desktop-dev.iso: $(KERNEL_STRIPPED) $(BUILD)/rootfs-desktop-dev.img $(ESP_DESKTOP) $(LIMINE_BIN) tools/gen-limine-conf.sh
-	$(call LIMINE_ISO_RULE,$@,$(BUILD)/desktop-dev-isodir,dev,$(BUILD)/rootfs-desktop-dev.img,$(ESP_DESKTOP))
+# ── Developer / boot-profiling desktop ISO (NOT shipped) ─────────────────────
+# Same desktop rootfs (autologin already baked into ROOTFS_DESKTOP below), but a
+# NON-quiet cmdline (dev mode) so vigil's [UBOOT] timeline + service logs reach
+# the serial console for profiling. Build:  make desktop-dev-iso
+$(BUILD)/loricaos-desktop-dev.iso: $(KERNEL_STRIPPED) $(ROOTFS_DESKTOP) $(ESP_DESKTOP) $(LIMINE_BIN) tools/gen-limine-conf.sh
+	$(call LIMINE_ISO_RULE,$@,$(BUILD)/desktop-dev-isodir,dev,$(ROOTFS_DESKTOP),$(ESP_DESKTOP))
 
 desktop-dev-iso: $(BUILD)/loricaos-desktop-dev.iso
 
@@ -345,8 +340,12 @@ $(BUILD)/desktop-overlay.db: tools/components.list tools/fetch-components.sh too
 	bash tools/fetch-components.sh
 	bash tools/make-desktop-meta.sh
 
+# The desktop rootfs bakes /etc/aegis/autologin=live so the LIVE ISO boots
+# straight to the desktop (no greeter friction on a "try it" boot). This is the
+# one sanctioned default: a real install STRIPS it on the first installed boot
+# (vigil), so installed systems always force the greeter. See docs/autologin.md.
 $(ROOTFS_DESKTOP): $(ROOTFS_SERVER) $(BUILD)/desktop-overlay.db user/bin/gui-installer/gui-installer.elf $(SKELETON_FILES_DESKTOP) tools/assemble-desktop-rootfs.sh
-	bash tools/assemble-desktop-rootfs.sh $@
+	AUTOLOGIN=live bash tools/assemble-desktop-rootfs.sh $@
 
 rootfs: $(ROOTFS_DESKTOP) $(ROOTFS_SERVER)
 
@@ -375,7 +374,7 @@ version:
 
 clean:
 	rm -rf $(BUILD)/loricaos-desktop.iso $(BUILD)/loricaos-server.iso $(BUILD)/loricaos-test.iso \
-	       $(BUILD)/loricaos-desktop-dev.iso $(BUILD)/desktop-dev-isodir $(BUILD)/rootfs-desktop-dev.img \
+	       $(BUILD)/loricaos-desktop-dev.iso $(BUILD)/desktop-dev-isodir \
 	       $(BUILD)/desktop-isodir $(BUILD)/server-isodir $(BUILD)/selftest-isodir \
 	       $(BUILD)/rootfs-desktop.img $(BUILD)/rootfs-server.img \
 	       $(BUILD)/esp-desktop.img $(BUILD)/esp-server.img \
