@@ -49,8 +49,19 @@ from had it enabled:
   being present), so autologin a user enables **later** via Settings persists
   normally. We only drop what the live media carried in.
 
-So: **live media may autologin; an installed system forces the greeter until the
+So: **the live ISO autologins; an installed system forces the greeter until the
 owner opts in.**
+
+### The shipped live ISO autologins
+
+`make desktop-iso` bakes `/etc/aegis/autologin=live` into its rootfs
+(`AUTOLOGIN=live` in the `$(ROOTFS_DESKTOP)` recipe), so booting the live media
+goes straight to the desktop — no login on a "try it" boot. The `live` user is
+uid 0 and ephemeral (the live rootfs is RAM-only), which is the norm for live
+media. The moment you **install**, vigil strips the file on first boot, so the
+installed system presents the greeter. `bastion` still prints
+`[BASTION] greeter ready` before auto-logging in, so `make test` / `ostest`
+(which key on that marker) are unaffected.
 
 ## Developer / boot-profiling ISO
 
