@@ -39,24 +39,24 @@ KPATH="boot():/boot/aegis.elf"
 case "$mode" in
     installed)
         WITH_MODULES=0
-        TIMEOUT=3
+        TIMEOUT=0
         LIVE_ARG=""
         ;;
     live)
         WITH_MODULES=1
-        TIMEOUT=3
+        TIMEOUT=0
         LIVE_ARG=" aegis_live=1"
         ;;
     server)
         # Server live ISO: text console only (no compositor to boot into).
         WITH_MODULES=1
-        TIMEOUT=3
+        TIMEOUT=0
         LIVE_ARG=" aegis_live=1"
         ;;
     server-installed)
         # Installed server: text console only, boots ext2 root from disk.
         WITH_MODULES=0
-        TIMEOUT=3
+        TIMEOUT=0
         LIVE_ARG=""
         ;;
     test|installer-test|dltest|perfbench|selftest|infer|soak|ffsmoke|videoplay)
