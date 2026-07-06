@@ -23,7 +23,7 @@ ROOTFS_SERVER  = $(BUILD)/rootfs-server.img
 CXX_AEGIS       = /opt/aegis-cxx/bin/x86_64-buildroot-linux-musl-g++
 CXX_FLAGS_AEGIS = -static -O2 -std=c++23 -fno-pie -no-pie
 
-.PHONY: all iso desktop-iso server-iso selftest-iso soak-iso ffsmoke-iso ffsmoke-test rootfs build-musl test clean version curl_bin
+.PHONY: all iso desktop-iso desktop-dev-iso server-iso selftest-iso soak-iso ffsmoke-iso ffsmoke-test rootfs build-musl test clean version curl_bin
 all: iso
 
 # ── Kernel artifact: fetched, not built ─────────────────────────────────────
@@ -279,6 +279,20 @@ desktop-iso: $(BUILD)/loricaos-desktop.iso
 server-iso:  $(BUILD)/loricaos-server.iso
 iso: desktop-iso server-iso
 
+# ── Developer / boot-profiling desktop ISO (NOT a shipped artifact) ───────────
+# Same desktop rootfs, but with /etc/aegis/autologin baked in (AUTOLOGIN=live)
+# and a NON-quiet cmdline (dev mode) so vigil's [UBOOT] timeline + service logs
+# reach the serial console. A real install STRIPS the autologin (vigil's first-
+# installed-boot cleanup), so installed systems are unaffected and force the
+# greeter. Build:  make desktop-dev-iso   (see docs/autologin.md)
+$(BUILD)/rootfs-desktop-dev.img: $(ROOTFS_SERVER) $(BUILD)/desktop-overlay.db user/bin/gui-installer/gui-installer.elf $(SKELETON_FILES_DESKTOP) tools/assemble-desktop-rootfs.sh
+	AUTOLOGIN=live bash tools/assemble-desktop-rootfs.sh $@
+
+$(BUILD)/loricaos-desktop-dev.iso: $(KERNEL_STRIPPED) $(BUILD)/rootfs-desktop-dev.img $(ESP_DESKTOP) $(LIMINE_BIN) tools/gen-limine-conf.sh
+	$(call LIMINE_ISO_RULE,$@,$(BUILD)/desktop-dev-isodir,dev,$(BUILD)/rootfs-desktop-dev.img,$(ESP_DESKTOP))
+
+desktop-dev-iso: $(BUILD)/loricaos-desktop-dev.iso
+
 # Self-test ISO: the desktop image (carries captest), kernel cmdline `selftest`
 # so vigil runs the userland security probe (/bin/selftest -> /bin/captest).
 $(BUILD)/loricaos-test.iso: $(KERNEL_STRIPPED) $(ROOTFS_DESKTOP) $(ESP_DESKTOP) $(LIMINE_BIN) tools/gen-limine-conf.sh
@@ -361,6 +375,7 @@ version:
 
 clean:
 	rm -rf $(BUILD)/loricaos-desktop.iso $(BUILD)/loricaos-server.iso $(BUILD)/loricaos-test.iso \
+	       $(BUILD)/loricaos-desktop-dev.iso $(BUILD)/desktop-dev-isodir $(BUILD)/rootfs-desktop-dev.img \
 	       $(BUILD)/desktop-isodir $(BUILD)/server-isodir $(BUILD)/selftest-isodir \
 	       $(BUILD)/rootfs-desktop.img $(BUILD)/rootfs-server.img \
 	       $(BUILD)/esp-desktop.img $(BUILD)/esp-server.img \

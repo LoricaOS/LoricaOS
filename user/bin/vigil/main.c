@@ -281,8 +281,15 @@ process_cmd(void)
 /* Installed systems carry the live ISO's installer binaries because the
  * install is a raw block copy of the live rootfs. Live boots are marked
  * with aegis_live=1 on the kernel cmdline (gen-limine-conf.sh); when the
- * marker is absent we are on an installed disk, so drop the installers
- * on first boot. Subsequent boots find nothing to remove and skip. */
+ * marker is absent we are on an installed disk, so drop the live-only state
+ * on first boot. Subsequent boots find nothing to remove and skip.
+ *
+ * "Live-only state" is (1) the installer binaries and (2) any /etc/aegis/autologin
+ * the live media shipped — an installed system MUST present the greeter, not
+ * inherit the live ISO's passwordless auto-login. This runs only on the first
+ * installed boot (gated by the installers-present check), so a user who later
+ * opts into autologin via Settings → Users keeps it: we drop only what the live
+ * media carried in, never a choice made on the running installed system. */
 static void
 remove_installers_if_installed(int is_live)
 {
@@ -300,8 +307,11 @@ remove_installers_if_installed(int is_live)
     for (unsigned i = 0; i < sizeof(paths) / sizeof(paths[0]); i++)
         unlink(paths[i]);
     rmdir("/apps/gui-installer");  /* empty bundle dir → invisible to scans */
+    /* Force the greeter on installed systems: strip any autologin the live
+     * media carried. Re-enabled per-user via Settings → Users. */
+    unlink("/etc/aegis/autologin");
     sync();
-    vigil_log("installed system: installers removed");
+    vigil_log("installed system: installers + live autologin removed");
 }
 
 int
