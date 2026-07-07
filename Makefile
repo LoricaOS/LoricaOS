@@ -30,6 +30,11 @@ all: iso
 # fetch-kernel.sh resolves vendor/aegis-<ver>.elf (local cache) or downloads the
 # release for KERNEL_VERSION. KERNEL_STRIPPED is the (already-stripped) kernel
 # the ESP image and ISO embed — same variable name the OS rules below expect.
+# Optional iwlwifi firmware, shipped as the graphical ISOs' 3rd Limine module
+# (module2) so the AX200 driver can init the radio. Vendored (fetched/copied)
+# rather than built here; absent → the ISO simply carries no WiFi firmware.
+IWL_FW := $(wildcard vendor/iwlwifi-cc-a0-59.ucode)
+
 KERNEL_STRIPPED = $(BUILD)/aegis-stripped.elf
 $(KERNEL_STRIPPED):
 	bash tools/fetch-kernel.sh $(KERNEL_VERSION) $@
@@ -255,7 +260,8 @@ define LIMINE_ISO_RULE
 	cp $(KERNEL_STRIPPED) $(2)/boot/aegis.elf
 	cp $(4) $(2)/boot/rootfs.img
 	cp $(5) $(2)/boot/esp.img
-	sh tools/gen-limine-conf.sh $(3) > $(2)/boot/limine/limine.conf
+	$(if $(IWL_FW),cp $(IWL_FW) $(2)/boot/iwlwifi.ucode,@true)
+	$(if $(IWL_FW),WITH_FW=1 )sh tools/gen-limine-conf.sh $(3) > $(2)/boot/limine/limine.conf
 	cp $(LIMINE_DIR)/limine-bios.sys $(LIMINE_DIR)/limine-bios-cd.bin $(LIMINE_DIR)/limine-uefi-cd.bin $(2)/boot/limine/
 	cp $(LIMINE_DIR)/BOOTX64.EFI $(LIMINE_DIR)/BOOTIA32.EFI $(2)/EFI/BOOT/
 	xorriso -as mkisofs -R -r -J \
