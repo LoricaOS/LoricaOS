@@ -16,22 +16,37 @@ sys_setfg(long pid)
 static void
 exec_cmd(cmd_t *cmd, char **envp)
 {
-    char full[256];
-    if (strchr(cmd->argv[0], '/') != NULL) {
+    char full[512];
+    char *name = cmd->argv[0];
+    if (strchr(name, '/') != NULL) {
         /* Contains a slash → it's a pathname (absolute or relative to cwd),
          * e.g. /bin/tcc or ./hello. Exec it as-is, no PATH/bundle lookup. */
-        execve(cmd->argv[0], cmd->argv, envp);
+        execve(name, cmd->argv, envp);
     } else {
-        snprintf(full, sizeof(full), "/bin/%s", cmd->argv[0]);
-        execve(full, cmd->argv, envp);
-        /* Bare name not in /bin: try the system app-bundle tree, so
-         * `calculator` works from a terminal. /apps is root-controlled
-         * like /bin (kernel cap-policy trusted-path anchor). */
-        if (errno == ENOENT) {
-            snprintf(full, sizeof(full), "/apps/%s/%s",
-                     cmd->argv[0], cmd->argv[0]);
-            execve(full, cmd->argv, envp);
+        /* Bare name: search each PATH directory (from the child's env, so an
+         * exported PATH like /tcnative/bin is honored — env_set updates the
+         * store execve receives, not the live `environ` getenv sees). Falls
+         * back to /bin:/usr/bin, then the /apps bundle tree. */
+        const char *path = NULL;
+        for (int i = 0; envp && envp[i]; i++)
+            if (strncmp(envp[i], "PATH=", 5) == 0) { path = envp[i] + 5; break; }
+        if (!path || !*path) path = "/bin:/usr/bin";
+        const char *p = path;
+        while (*p) {
+            const char *e = strchr(p, ':');
+            int len = e ? (int)(e - p) : (int)strlen(p);
+            if (len > 0 && len < (int)sizeof(full) - 2 - (int)strlen(name)) {
+                memcpy(full, p, len);
+                full[len] = '/';
+                strcpy(full + len + 1, name);
+                execve(full, cmd->argv, envp);   /* returns only on failure */
+            }
+            if (!e) break;
+            p = e + 1;
         }
+        /* /apps is root-controlled like /bin (kernel cap-policy anchor). */
+        snprintf(full, sizeof(full), "/apps/%s/%s", name, name);
+        execve(full, cmd->argv, envp);
     }
     /* execve returned — print errno so the user knows whether it was
      * ENOENT, EACCES, ENOEXEC, EAGAIN (process limit), etc.  Without
