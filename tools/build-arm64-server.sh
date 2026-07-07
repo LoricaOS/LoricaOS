@@ -94,9 +94,12 @@ BEARSSL_A64="$REPO/build/bearssl-install-arm64"
 [ -f "$REPO/build/herald-keys/trusted_key.h" ] || bash "$REPO/tools/herald-keygen.sh" >/dev/null 2>&1 || true
 [ -f "$BEARSSL_A64/lib/libbearssl.a" ] || \
     REPO="$REPO" SUFFIX=-arm64 CC="$CC" AR=aarch64-linux-gnu-ar bash "$REPO/tools/build-bearssl.sh" >/dev/null 2>&1 || true
+# OUT points outside the source dir so this cross-build never clobbers the
+# native user/bin/herald/herald.elf (which the x86_64 rootfs ships).
 if make -C "$REPO/user/bin/herald" CC="$CC" BEARSSL="$BEARSSL_A64" \
-        KEYDIR="$REPO/build/herald-keys" HERALD_ARCH=arm64 herald.elf >/tmp/arm64-herald.err 2>&1; then
-    cp "$REPO/user/bin/herald/herald.elf" "$BLOBS/herald.bin"; "$STRIP" -s "$BLOBS/herald.bin"
+        KEYDIR="$REPO/build/herald-keys" HERALD_ARCH=arm64 \
+        OUT="$REPO/build/herald-arm64.elf" >/tmp/arm64-herald.err 2>&1; then
+    cp "$REPO/build/herald-arm64.elf" "$BLOBS/herald.bin"; "$STRIP" -s "$BLOBS/herald.bin"
     log "built herald (arm64, HERALD_ARCH=arm64)"
 else
     log "SKIP herald (see /tmp/arm64-herald.err)"
