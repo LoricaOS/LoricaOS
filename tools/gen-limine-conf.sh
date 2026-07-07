@@ -87,6 +87,9 @@ emit_entry() {  # $1 = title, $2 = cmdline
     if [ "$WITH_MODULES" = 1 ]; then
         printf '    module_path: boot():/boot/rootfs.img\n'
         printf '    module_path: boot():/boot/esp.img\n'
+        # 3rd module (module2) = iwlwifi firmware, when the ISO carries it. The
+        # kernel reads it via arch_get_module3/ramdisk_get_fw_blob for the AX200.
+        [ "${WITH_FW:-0}" = 1 ] && printf '    module_path: boot():/boot/iwlwifi.ucode\n'
     fi
     printf '    cmdline: %s\n\n' "$2"
 }
