@@ -8,3 +8,7 @@
 # Limine is fetched (pinned in tools/limine/VERSION), not vendored.
 /tools/limine/*
 !/tools/limine/VERSION
+
+# herald PRIVATE signing key — NEVER commit (public trusted_key.h IS committed).
+/tools/herald-keys/*.key
+/build/herald-keys/
