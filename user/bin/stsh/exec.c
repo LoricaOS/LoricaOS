@@ -11,6 +11,25 @@ sys_setfg(long pid)
 }
 
 /*
+ * heredoc_stdin — write a heredoc body into a pipe and return the read end.
+ * The kernel pipe buffer is 4040 bytes, so writing a small body then closing
+ * the write end never blocks and needs no writer process — the command reads
+ * it back and sees EOF after. ponytail: bodies over the buffer are truncated;
+ * a fork-writer would be the upgrade if a real script ever needs a huge heredoc.
+ */
+int
+heredoc_stdin(const char *body)
+{
+    int pfd[2];
+    if (pipe(pfd) < 0) return -1;
+    size_t len = strlen(body);
+    if (len > 4000) len = 4000;
+    if (len && write(pfd[1], body, len) < 0) { close(pfd[0]); close(pfd[1]); return -1; }
+    close(pfd[1]);
+    return pfd[0];
+}
+
+/*
  * exec_cmd — exec the command. Never returns on success.
  */
 static void
@@ -121,6 +140,12 @@ run_pipeline(cmd_t *cmds, int n, char **envp, int *last_exit)
                 }
                 dup2(fd, STDIN_FILENO);
                 close(fd);
+            }
+
+            /* << heredoc — feeds the literal body as stdin */
+            if (cmds[i].heredoc_body) {
+                int hf = heredoc_stdin(cmds[i].heredoc_body);
+                if (hf >= 0) { dup2(hf, STDIN_FILENO); close(hf); }
             }
 
             /* > or >> stdout redirect */
@@ -255,6 +280,10 @@ run_pipeline_bg(cmd_t *cmds, int n, char **envp)
             if (cmds[i].stdin_file) {
                 int fd = open(cmds[i].stdin_file, O_RDONLY);
                 if (fd >= 0) { dup2(fd, STDIN_FILENO); close(fd); }
+            }
+            if (cmds[i].heredoc_body) {
+                int hf = heredoc_stdin(cmds[i].heredoc_body);
+                if (hf >= 0) { dup2(hf, STDIN_FILENO); close(hf); }
             }
             if (cmds[i].stdout_file) {
                 int flags = O_WRONLY | O_CREAT;

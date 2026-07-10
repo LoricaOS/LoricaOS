@@ -83,7 +83,50 @@ tokenize(const char *text, tok_t *toks, int maxtoks, char *arena, int arenalen)
         if (c == ';')  { OP(T_SEMI,1);  continue; }
         if (c == '(')  { OP(T_LPAREN,1); continue; }
         if (c == ')')  { OP(T_RPAREN,1); continue; }
-        if (c == '<')  { if (p[1]=='<') OP(T_DLESS,2); else OP(T_LT,1); continue; }
+        if (c == '<' && p[1] == '<') {
+            /* heredoc: <<[-]DELIM \n body... \n DELIM. Emit T_DLESS then a
+             * T_WORD carrying the (literal) body. <<- strips leading tabs from
+             * body lines and the closing delimiter. Body is always literal —
+             * like <<'EOF' (no $-expansion); that's the ponytail ceiling. */
+            if (nt >= maxtoks - 1) return -1;
+            toks[nt].type = T_DLESS; toks[nt].text = NULL; nt++;
+            p += 2;
+            int strip = 0;
+            if (*p == '-') { strip = 1; p++; }
+            while (*p == ' ' || *p == '\t') p++;
+            char delim[64]; int dl = 0; char q = 0;
+            if (*p == '\'' || *p == '"') { q = *p; p++; }
+            while (*p && dl < 63) {
+                if (q) { if (*p == q) { p++; break; } }
+                else if (*p==' '||*p=='\t'||*p=='\n') break;
+                delim[dl++] = *p++;
+            }
+            delim[dl] = '\0';
+            while (*p && *p != '\n') p++;      /* skip rest of the opening line */
+            if (*p == '\n') p++;
+            int bstart = used;
+            while (*p) {
+                const char *ls = p;
+                if (strip) while (*ls == '\t') ls++;
+                const char *e = ls; while (*e && *e != '\n') e++;
+                if ((int)(e - ls) == dl && !strncmp(ls, delim, dl)) {
+                    p = (*e == '\n') ? e + 1 : e; break;   /* closing delimiter */
+                }
+                for (const char *s = ls; s < e && used < arenalen - 1; s++)
+                    arena[used++] = *s;
+                if (used < arenalen - 1) arena[used++] = '\n';
+                p = (*e == '\n') ? e + 1 : e;
+            }
+            if (used < arenalen - 1) arena[used++] = '\0';
+            if (nt >= maxtoks - 2) return -1;
+            toks[nt].type = T_WORD; toks[nt].text = &arena[bstart]; nt++;
+            /* The command ends at the opening line's newline (which we consumed
+             * while slurping the body); emit it so the next line is its own
+             * statement, not merged into this command's argv. */
+            toks[nt].type = T_NEWLINE; toks[nt].text = NULL; nt++;
+            continue;
+        }
+        if (c == '<')  { OP(T_LT,1); continue; }
         if (c == '>')  { if (p[1]=='>') OP(T_GTGT,2); else if (p[1]=='&') OP(T_GTAMP,2); else OP(T_GT,1); continue; }
         if (c == '2' && p[1] == '>') {
             if (p[2]=='&' && p[3]=='1') OP(T_DGTAMP,4);

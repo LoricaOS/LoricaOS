@@ -16,7 +16,8 @@
  * advances without side effects. Simple commands reuse cmd_t + exec.c's
  * run_pipeline(); expansion is done per-word at execution time.
  *
- * ponytail limits (Layer 3 if a real build needs them): no heredocs (<<); a
+ * ponytail limits (Layer 3 if a real build needs them): heredoc bodies are
+ * literal (like <<'EOF' — no $-expansion) and capped at the pipe buffer; a
  * compound command can't be a stage of a multi-stage pipeline; prefix
  * assignments (VAR=x cmd) and pipeline-stage assignments apply to the global
  * env, not a scoped one. Noted where they bite.
@@ -538,6 +539,10 @@ redir_apply(cmd_t *c, int saved[3])
         if (fd<0){ fprintf(stderr,"%s: %s\n",c->stdin_file,strerror(errno)); return -1; }
         saved[0]=dup(0); dup2(fd,0); close(fd);
     }
+    if (c->heredoc_body) {
+        int hf=heredoc_stdin(c->heredoc_body);
+        if (hf>=0){ if(saved[0]<0)saved[0]=dup(0); dup2(hf,0); close(hf); }
+    }
     if (c->stdout_file) {
         int fl=O_WRONLY|O_CREAT|(c->stdout_append?O_APPEND:O_TRUNC);
         int fd=open(c->stdout_file,fl,0644);
@@ -581,6 +586,7 @@ run_simple(int *pi, int run)
             if (nraw < MAX_ARGV) raw[nraw++] = T[i].text;
             i++;
         } else if (tt==T_LT)    { if(T[i+1].type==T_WORD){cmd.stdin_file=T[i+1].text;i+=2;}else i++; }
+        else if (tt==T_DLESS)   { if(T[i+1].type==T_WORD){cmd.heredoc_body=T[i+1].text;i+=2;}else i++; }
         else if (tt==T_GT)      { if(T[i+1].type==T_WORD){cmd.stdout_file=T[i+1].text;cmd.stdout_append=0;i+=2;}else i++; }
         else if (tt==T_GTGT)    { if(T[i+1].type==T_WORD){cmd.stdout_file=T[i+1].text;cmd.stdout_append=1;i+=2;}else i++; }
         else if (tt==T_DGT)     { if(T[i+1].type==T_WORD){cmd.stderr_file=T[i+1].text;i+=2;}else i++; }
@@ -618,7 +624,7 @@ run_simple(int *pi, int run)
     if (cmd.stdout_file) cmd.stdout_file = expand_one(cmd.stdout_file, rout, sizeof rout);
     if (cmd.stderr_file) cmd.stderr_file = expand_one(cmd.stderr_file, rerr, sizeof rerr);
 
-    int need_redir = cmd.stdin_file||cmd.stdout_file||cmd.stderr_file||cmd.stderr_to_stdout;
+    int need_redir = cmd.stdin_file||cmd.heredoc_body||cmd.stdout_file||cmd.stderr_file||cmd.stderr_to_stdout;
     int rsaved[3];
 
     /* function call? runs against the function's private token copy */
@@ -903,6 +909,7 @@ run_pipeline_node(int *pi, int run, int in_loop)
             toktype_t tt=T[i].type;
             if (tt==T_WORD){ if(nraw==0&&at_block_end(i))break; if(nraw<MAX_ARGV)raw[nraw++]=T[i].text; i++; }
             else if (tt==T_LT){ if(T[i+1].type==T_WORD){cmd.stdin_file=T[i+1].text;i+=2;}else i++; }
+            else if (tt==T_DLESS){ if(T[i+1].type==T_WORD){cmd.heredoc_body=T[i+1].text;i+=2;}else i++; }
             else if (tt==T_GT){ if(T[i+1].type==T_WORD){cmd.stdout_file=T[i+1].text;cmd.stdout_append=0;i+=2;}else i++; }
             else if (tt==T_GTGT){ if(T[i+1].type==T_WORD){cmd.stdout_file=T[i+1].text;cmd.stdout_append=1;i+=2;}else i++; }
             else if (tt==T_DGT){ if(T[i+1].type==T_WORD){cmd.stderr_file=T[i+1].text;i+=2;}else i++; }

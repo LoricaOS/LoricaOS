@@ -48,6 +48,7 @@ typedef struct {
     char *stderr_file;        /* path for 2> redirect, NULL if none */
     int   stderr_to_stdout;   /* 1 if 2>&1 was specified */
     int   stdout_dup_to;      /* target fd for >&N (0 = none) */
+    char *heredoc_body;       /* literal body for << redirect, NULL if none */
 } cmd_t;
 
 /* ── lexer.c ── */
@@ -124,5 +125,10 @@ int  stsh_admin_active(void);   /* 1 if this shell session is elevated */
 void run_pipeline(cmd_t *cmds, int n, char **envp, int *last_exit);
 void run_pipeline_bg(cmd_t *cmds, int n, char **envp);
 int  try_builtin(cmd_t *cmds, int n, int *last_exit);
+
+/* Materialize a heredoc body into a readable fd (writes to a pipe, returns the
+ * read end). Body is capped at the pipe buffer so the single-process write
+ * never blocks. Returns -1 on failure. */
+int  heredoc_stdin(const char *body);
 
 #endif /* STSH_H */
