@@ -35,8 +35,16 @@ int herald_fetch(const char *url, const char *outpath)
          * list, and package is ECDSA-P256/SHA-256 verified after the fetch, so a
          * MITM cannot substitute content without the (offline) signing key. This
          * makes plain HTTP and HTTPS equally safe, per the herald trust model. */
+        /* Resume + retry so a flaky transport recovers instead of failing the
+         * whole install. Aegis's TCP stack still drops/stalls sustained large
+         * transfers (a 279 MB package aborts partway); -C - resumes from the
+         * partial file, --retry re-attempts, and --speed-time aborts a stalled
+         * connection (below 1 KiB/s for 30 s) so --retry actually fires. */
         char *argv[] = {
             (char *)"/bin/curl", (char *)"-s", (char *)"-f", (char *)"-k",
+            (char *)"-C", (char *)"-",
+            (char *)"--retry", (char *)"20", (char *)"--retry-delay", (char *)"2",
+            (char *)"--speed-limit", (char *)"1024", (char *)"--speed-time", (char *)"30",
             (char *)"-o", (char *)outpath, (char *)url, (char *)0
         };
         char *envp[] = { (char *)0 };

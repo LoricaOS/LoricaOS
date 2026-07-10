@@ -39,27 +39,37 @@ KPATH="boot():/boot/aegis.elf"
 case "$mode" in
     installed)
         WITH_MODULES=0
-        TIMEOUT=3
+        TIMEOUT=0
         LIVE_ARG=""
         ;;
     live)
         WITH_MODULES=1
-        TIMEOUT=3
+        TIMEOUT=0
         LIVE_ARG=" aegis_live=1"
         ;;
     server)
         # Server live ISO: text console only (no compositor to boot into).
         WITH_MODULES=1
-        TIMEOUT=3
+        TIMEOUT=0
         LIVE_ARG=" aegis_live=1"
         ;;
     server-installed)
         # Installed server: text console only, boots ext2 root from disk.
         WITH_MODULES=0
-        TIMEOUT=3
+        TIMEOUT=0
         LIVE_ARG=""
         ;;
-    test|installer-test|dltest|perfbench|selftest|infer|soak)
+    dev)
+        # Developer/profiling desktop ISO: graphical, NON-quiet (so vigil's
+        # [UBOOT] timeline + service logs reach the serial console). Autologin
+        # comes from /etc/aegis/autologin baked into the dev rootfs (AUTOLOGIN=),
+        # not the cmdline. aegis_live=1 keeps it live (installers/autologin not
+        # stripped). Built by `make desktop-dev-iso` — never a shipped artifact.
+        WITH_MODULES=1
+        TIMEOUT=0
+        LIVE_ARG=" aegis_live=1"
+        ;;
+    test|installer-test|dltest|perfbench|selftest|infer|soak|ffsmoke|videoplay)
         WITH_MODULES=1
         TIMEOUT=0
         LIVE_ARG=" aegis_live=1"
@@ -77,6 +87,9 @@ emit_entry() {  # $1 = title, $2 = cmdline
     if [ "$WITH_MODULES" = 1 ]; then
         printf '    module_path: boot():/boot/rootfs.img\n'
         printf '    module_path: boot():/boot/esp.img\n'
+        # 3rd module (module2) = iwlwifi firmware, when the ISO carries it. The
+        # kernel reads it via arch_get_module3/ramdisk_get_fw_blob for the AX200.
+        [ "${WITH_FW:-0}" = 1 ] && printf '    module_path: boot():/boot/iwlwifi.ucode\n'
     fi
     printf '    cmdline: %s\n\n' "$2"
 }
@@ -97,12 +110,24 @@ case "$mode" in
     test)
         emit_entry "LoricaOS (test)" "boot=text quiet$LIVE_ARG"
         ;;
+    dev)
+        # NON-quiet so vigil's [UBOOT] timeline + service logs hit the serial
+        # console for boot profiling. Autologin comes from /etc/aegis/autologin
+        # in the dev rootfs (no bastion_autologin= cmdline, no test password).
+        emit_entry "LoricaOS (dev)" "boot=graphical$LIVE_ARG"
+        ;;
     soak)
         # Graphical stability soak: production graphical config, passwordless
         # autologin (so the compositor actually starts, unattended), and the
         # `stresssoak` token that starts the stresstest vigil service.
         emit_entry "LoricaOS (soak)" \
             "boot=graphical quiet bastion_autologin=live stresssoak$LIVE_ARG"
+        ;;
+    videoplay)
+        # Autoplay a test clip with lumen-video: graphical autologin + the
+        # `videoplay` token that fires the autoplay service (tools/video-iso.sh).
+        emit_entry "LoricaOS (video)" \
+            "boot=graphical quiet bastion_autologin=live videoplay$LIVE_ARG"
         ;;
     installer-test)
         emit_entry "LoricaOS (installer-test)" "boot=graphical quiet bastion_autologin=root$LIVE_ARG"
@@ -115,6 +140,9 @@ case "$mode" in
         ;;
     selftest)
         emit_entry "LoricaOS (selftest)" "boot=text quiet selftest$LIVE_ARG"
+        ;;
+    ffsmoke)
+        emit_entry "LoricaOS (ffsmoke)" "boot=text quiet ffsmoke$LIVE_ARG"
         ;;
     infer)
         # No explicit boot= — exercises vigil's mode inference (graphical iff

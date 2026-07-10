@@ -9,6 +9,7 @@
 /tools/limine/*
 !/tools/limine/VERSION
 
-# herald PRIVATE signing key — NEVER commit (public trusted_key.h IS committed).
+# herald PRIVATE signing key — NEVER commit (public trust anchor trusted_key.h IS committed).
+# Rotated 2026-07-09 after the prior key leaked in git history.
 /tools/herald-keys/*.key
 /build/herald-keys/

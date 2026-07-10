@@ -16,12 +16,15 @@
 
 /* ── Constants ── */
 
-#define MAX_PIPELINE    6     /* max pipeline stages */
-#define MAX_ARGV        16    /* max args per command */
-#define LINE_SIZE       512   /* input line buffer */
+#define MAX_PIPELINE    8     /* max pipeline stages */
+#define MAX_ARGV        64    /* max args per command */
+#define LINE_SIZE       4096  /* input line buffer (configure scripts are wide) */
 #define ENV_MAX         64    /* max environment variables */
 #define HIST_SIZE       64    /* history ring buffer entries */
 #define CAP_TABLE_SIZE  16    /* max capability slots to query */
+#define MAX_TOKENS      256   /* max lexer tokens per line */
+#define LEX_ARENA       8192  /* expanded-word scratch arena per line */
+#define MAX_PARAMS      64    /* positional parameters $1..$n */
 
 /* ── Syscall numbers ── */
 
@@ -38,17 +41,46 @@ typedef struct {
 
 typedef struct {
     char *argv[MAX_ARGV + 1]; /* NULL-terminated */
+    int   argc;
     char *stdin_file;         /* path for < redirect, NULL if none */
     char *stdout_file;        /* path for > redirect, NULL if none */
     int   stdout_append;      /* 1 if >> (append), 0 if > (truncate) */
+    char *stderr_file;        /* path for 2> redirect, NULL if none */
     int   stderr_to_stdout;   /* 1 if 2>&1 was specified */
+    int   stdout_dup_to;      /* target fd for >&N (0 = none) */
 } cmd_t;
 
-/* ── parser.c ── */
+/* ── lexer.c ── */
 
-int parse_command(char *seg, cmd_t *cmd);
-int parse_pipeline(char *line, cmd_t *cmds, int max);
-int parse_pipeline_bg(char *line, cmd_t *cmds, int max, int *bg_out);
+typedef enum {
+    T_WORD, T_PIPE, T_AND, T_OR, T_SEMI, T_AMP,
+    T_LT, T_GT, T_GTGT, T_DGT, T_DGTAMP, T_GTAMP, T_DLESS,
+    T_LPAREN, T_RPAREN, T_NEWLINE, T_EOF
+} toktype_t;
+
+typedef struct {
+    toktype_t type;
+    char     *text;   /* WORD tokens: RAW (unexpanded, still-quoted) word text */
+} tok_t;
+
+/* Structural tokenizer: splits raw text into tokens WITHOUT expanding words
+ * (expansion is deferred to execution time in run.c so loop bodies re-expand
+ * each pass). Returns token count (T_EOF appended), or -1 on overflow. */
+int tokenize(const char *text, tok_t *toks, int maxtoks, char *arena, int arenalen);
+
+/* Run `cmd` and append its stdout (trailing newlines stripped) to a buffer —
+ * the $(...) / backtick capture primitive. Defined in run.c. */
+void sh_capture(const char *cmd, char *buf, int *used, int cap);
+
+/* ── run.c ── */
+
+extern int g_last_exit;
+
+void run_set_params(const char *arg0, char **params, int nparams);
+int  run_program(const char *text);              /* lex+parse+exec a whole program */
+int  run_line(const char *line);                 /* alias for run_program */
+int  run_script(const char *path, char **argv_from, int argc_from);
+int  sh_incomplete(const char *buf);             /* interactive: needs more input? */
 
 /* ── env.c ── */
 

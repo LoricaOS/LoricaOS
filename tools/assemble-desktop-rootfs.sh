@@ -81,6 +81,20 @@ if [ -f "$DB" ]; then
     echo "[assemble] seeded herald db ($(grep -c . "$DB") packages)"
 fi
 
+# 4. Developer autologin — opt-in via the AUTOLOGIN env var, NEVER set for
+#    production builds. Injects /etc/aegis/autologin=<user> so bastion skips the
+#    greeter and auto-logs-in that user (the same production file Settings →
+#    Users writes). A real install STRIPS this on the first installed boot
+#    (vigil's remove_installers_if_installed), so installed systems always force
+#    the greeter. Used by `make desktop-dev-iso` for boot profiling.
+if [ -n "${AUTOLOGIN:-}" ]; then
+    altmp="$(mktemp)"; printf '%s\n' "$AUTOLOGIN" > "$altmp"
+    ensure_dir "/etc/aegis"
+    write_file "$altmp" "/etc/aegis/autologin" 0100644
+    rm -f "$altmp"
+    echo "[assemble] DEV autologin=$AUTOLOGIN -> /etc/aegis/autologin (stripped on install)"
+fi
+
 # Truncate trailing zero blocks (kernel re-expands from the superblock).
 python3 - "$OUT" <<'PYEOF'
 import os, sys

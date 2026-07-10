@@ -23,13 +23,18 @@ ROOTFS_SERVER  = $(BUILD)/rootfs-server.img
 CXX_AEGIS       = /opt/aegis-cxx/bin/x86_64-buildroot-linux-musl-g++
 CXX_FLAGS_AEGIS = -static -O2 -std=c++23 -fno-pie -no-pie
 
-.PHONY: all iso desktop-iso server-iso selftest-iso soak-iso rootfs build-musl test clean version curl_bin
+.PHONY: all iso desktop-iso desktop-dev-iso server-iso selftest-iso soak-iso ffsmoke-iso ffsmoke-test rootfs build-musl test clean version curl_bin
 all: iso
 
 # ── Kernel artifact: fetched, not built ─────────────────────────────────────
 # fetch-kernel.sh resolves vendor/aegis-<ver>.elf (local cache) or downloads the
 # release for KERNEL_VERSION. KERNEL_STRIPPED is the (already-stripped) kernel
 # the ESP image and ISO embed — same variable name the OS rules below expect.
+# Optional iwlwifi firmware, shipped as the graphical ISOs' 3rd Limine module
+# (module2) so the AX200 driver can init the radio. Vendored (fetched/copied)
+# rather than built here; absent → the ISO simply carries no WiFi firmware.
+IWL_FW := $(wildcard vendor/iwlwifi-cc-a0-59.ucode)
+
 KERNEL_STRIPPED = $(BUILD)/aegis-stripped.elf
 $(KERNEL_STRIPPED):
 	bash tools/fetch-kernel.sh $(KERNEL_VERSION) $@
@@ -54,7 +59,7 @@ SIMPLE_USER_PROGS = \
     shutdown reboot aegisctl login stsh httpd sshd nettest polltest poll-test sockreftest contresume spawnleak \
     hostname ip \
     smpstress futexstress mmfaultstress elffuzz sysfuzz fduaf blkuaf extabtest vforkstress dltest captest cowtest stresstest \
-    perfbench-ipc forkbench selftest
+    perfbench-ipc forkbench selftest ffsmoke
 
 # Generate rules: user/bin/foo/foo.elf depends on musl AND its own sources,
 # so editing any .c/.h under user/bin/foo triggers a rebuild.  Without the
@@ -255,7 +260,8 @@ define LIMINE_ISO_RULE
 	cp $(KERNEL_STRIPPED) $(2)/boot/aegis.elf
 	cp $(4) $(2)/boot/rootfs.img
 	cp $(5) $(2)/boot/esp.img
-	sh tools/gen-limine-conf.sh $(3) > $(2)/boot/limine/limine.conf
+	$(if $(IWL_FW),cp $(IWL_FW) $(2)/boot/iwlwifi.ucode,@true)
+	$(if $(IWL_FW),WITH_FW=1 )sh tools/gen-limine-conf.sh $(3) > $(2)/boot/limine/limine.conf
 	cp $(LIMINE_DIR)/limine-bios.sys $(LIMINE_DIR)/limine-bios-cd.bin $(LIMINE_DIR)/limine-uefi-cd.bin $(2)/boot/limine/
 	cp $(LIMINE_DIR)/BOOTX64.EFI $(LIMINE_DIR)/BOOTIA32.EFI $(2)/EFI/BOOT/
 	xorriso -as mkisofs -R -r -J \
@@ -279,11 +285,27 @@ desktop-iso: $(BUILD)/loricaos-desktop.iso
 server-iso:  $(BUILD)/loricaos-server.iso
 iso: desktop-iso server-iso
 
+# ── Developer / boot-profiling desktop ISO (NOT shipped) ─────────────────────
+# Same desktop rootfs (autologin already baked into ROOTFS_DESKTOP below), but a
+# NON-quiet cmdline (dev mode) so vigil's [UBOOT] timeline + service logs reach
+# the serial console for profiling. Build:  make desktop-dev-iso
+$(BUILD)/loricaos-desktop-dev.iso: $(KERNEL_STRIPPED) $(ROOTFS_DESKTOP) $(ESP_DESKTOP) $(LIMINE_BIN) tools/gen-limine-conf.sh
+	$(call LIMINE_ISO_RULE,$@,$(BUILD)/desktop-dev-isodir,dev,$(ROOTFS_DESKTOP),$(ESP_DESKTOP))
+
+desktop-dev-iso: $(BUILD)/loricaos-desktop-dev.iso
+
 # Self-test ISO: the desktop image (carries captest), kernel cmdline `selftest`
 # so vigil runs the userland security probe (/bin/selftest -> /bin/captest).
 $(BUILD)/loricaos-test.iso: $(KERNEL_STRIPPED) $(ROOTFS_DESKTOP) $(ESP_DESKTOP) $(LIMINE_BIN) tools/gen-limine-conf.sh
 	$(call LIMINE_ISO_RULE,$@,$(BUILD)/selftest-isodir,selftest,$(ROOTFS_DESKTOP),$(ESP_DESKTOP))
 selftest-iso: $(BUILD)/loricaos-test.iso
+
+# FFmpeg-port smoke ISO: server image (ffsmoke + its media live in the base
+# manifest), kernel cmdline `ffsmoke` so vigil decodes a real H.264 mp4 on
+# Aegis. Media + full run: tools/ffsmoke-test.sh. Not a release artifact.
+$(BUILD)/loricaos-ffsmoke.iso: $(KERNEL_STRIPPED) $(ROOTFS_SERVER) $(ESP_SERVER) $(LIMINE_BIN) tools/gen-limine-conf.sh
+	$(call LIMINE_ISO_RULE,$@,$(BUILD)/ffsmoke-isodir,ffsmoke,$(ROOTFS_SERVER),$(ESP_SERVER))
+ffsmoke-iso: $(BUILD)/loricaos-ffsmoke.iso
 
 # Graphical stability soak ISO: desktop image, kernel cmdline `stresssoak` +
 # boot=graphical, so vigil auto-runs /bin/stresstest inside a real graphical
@@ -324,8 +346,12 @@ $(BUILD)/desktop-overlay.db: tools/components.list tools/fetch-components.sh too
 	bash tools/fetch-components.sh
 	bash tools/make-desktop-meta.sh
 
+# The desktop rootfs bakes /etc/aegis/autologin=live so the LIVE ISO boots
+# straight to the desktop (no greeter friction on a "try it" boot). This is the
+# one sanctioned default: a real install STRIPS it on the first installed boot
+# (vigil), so installed systems always force the greeter. See docs/autologin.md.
 $(ROOTFS_DESKTOP): $(ROOTFS_SERVER) $(BUILD)/desktop-overlay.db user/bin/gui-installer/gui-installer.elf $(SKELETON_FILES_DESKTOP) tools/assemble-desktop-rootfs.sh
-	bash tools/assemble-desktop-rootfs.sh $@
+	AUTOLOGIN=live bash tools/assemble-desktop-rootfs.sh $@
 
 rootfs: $(ROOTFS_DESKTOP) $(ROOTFS_SERVER)
 
@@ -343,11 +369,18 @@ test: desktop-iso server-iso $(BUILD)/loricaos-test.iso
 	bash tools/servertest.sh $(BUILD)/loricaos-server.iso
 	bash tools/selftest.sh $(BUILD)/loricaos-test.iso
 
+# FFmpeg-port smoke: build the ffmpeg statics if needed, fetch a real H.264
+# mp4, boot the ffsmoke ISO, expect "[FFSMOKE] PASS" (demux + threaded H.264
+# decode + swscale on Aegis). Needs network for the one-time media fetch.
+ffsmoke-test:
+	bash tools/ffsmoke-test.sh
+
 version:
 	@echo "LoricaOS $(AEGIS_OS_VERSION) (kernel $(KERNEL_VERSION))"
 
 clean:
 	rm -rf $(BUILD)/loricaos-desktop.iso $(BUILD)/loricaos-server.iso $(BUILD)/loricaos-test.iso \
+	       $(BUILD)/loricaos-desktop-dev.iso $(BUILD)/desktop-dev-isodir \
 	       $(BUILD)/desktop-isodir $(BUILD)/server-isodir $(BUILD)/selftest-isodir \
 	       $(BUILD)/rootfs-desktop.img $(BUILD)/rootfs-server.img \
 	       $(BUILD)/esp-desktop.img $(BUILD)/esp-server.img \

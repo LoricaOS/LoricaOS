@@ -107,6 +107,10 @@ user/bin/perfbench-ipc/perfbench-ipc.elf /bin/perfbench-ipc
 user/bin/sockreftest/sockreftest.elf /bin/sockreftest
 user/bin/captest/captest.elf    /bin/captest
 user/bin/selftest/selftest.elf  /bin/selftest
+# FFmpeg-port smoke test (cmdline-gated vigil service; media fetched into
+# build/ by tools/ffsmoke-test.sh — both skipped from the image when absent)
+user/bin/ffsmoke/ffsmoke.elf    /bin/ffsmoke
+build/ffsmoke-media/clip.mp4    /usr/share/ffsmoke/clip.mp4
 user/bin/cowtest/cowtest.elf    /bin/cowtest
 user/bin/contresume/contresume.elf /bin/contresume
 user/bin/spawnleak/spawnleak.elf /bin/spawnleak

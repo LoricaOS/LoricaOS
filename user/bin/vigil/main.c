@@ -11,7 +11,9 @@
 #include <time.h>
 #include <stdio.h>
 
-#define VIGIL_MAX_SERVICES  16
+/* Base skeleton + desktop overlay already total ~18 service dirs; 16 silently
+ * dropped the overflow (readdir-last services never started). */
+#define VIGIL_MAX_SERVICES  32
 #define VIGIL_CMD_PATH      "/run/vigil.cmd"
 #define VIGIL_SERVICES_DIR  "/etc/vigil/services"
 #define VIGIL_PID_PATH      "/run/vigil.pid"
@@ -47,13 +49,36 @@ struct linux_dirent64 {
     char               d_name[256];
 };
 
+/* Milliseconds since the monotonic clock started (~kernel boot), so vigil's
+ * timeline chains directly onto the kernel's [BOOT] number. */
+static unsigned long
+uboot_ms(void)
+{
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+        return 0;
+    return (unsigned long)ts.tv_sec * 1000UL + (unsigned long)(ts.tv_nsec / 1000000L);
+}
+
 static void
 vigil_log(const char *msg)
 {
     if (s_quiet) return;
-    write(1, "vigil: ", 7);
+    char ts[24];
+    int n = snprintf(ts, sizeof(ts), "[%lu ms] vigil: ", uboot_ms());
+    write(1, ts, (size_t)n);
     write(1, msg, strlen(msg));
     write(1, "\n", 1);
+}
+
+/* uboot_mark — a boot-profiling milestone that prints even under `quiet`, so a
+ * production graphical boot can still be timed. Tagged [UBOOT] for grepping. */
+static void
+uboot_mark(const char *phase)
+{
+    char b[96];
+    int n = snprintf(b, sizeof(b), "[UBOOT] %lu ms %s\n", uboot_ms(), phase);
+    write(1, b, (size_t)n);
 }
 
 static void handle_usr1(int sig) { (void)sig; s_got_usr1 = 1; }
@@ -84,7 +109,10 @@ read_file(const char *path, char *buf, int bufsz)
 static void
 load_service(const char *name)
 {
-    if (s_nsvc >= VIGIL_MAX_SERVICES) return;
+    if (s_nsvc >= VIGIL_MAX_SERVICES) {
+        vigil_log(name);   /* don't drop a service silently */
+        return;
+    }
     service_t *s = &s_svcs[s_nsvc];
     memset(s, 0, sizeof(*s));
     /* Use memcpy after bounding to avoid -Wstringop-truncation on strncpy */
@@ -133,16 +161,22 @@ start_service(service_t *s)
     if (s->pid > 0) return;
     pid_t pid = fork();
     if (pid == 0) {
-        /* In quiet mode, close stdout for non-interactive services so daemon
-         * chatter doesn't pollute the serial stream (breaks test pattern
-         * matching).  Keep stderr open — services that need serial
-         * visibility (e.g. DHCP) can log via stderr/dprintf(2,...).
-         * Heuristic: close stdout if run_cmd is not /bin/login and not
-         * /bin/bastion (the two interactive auth services). */
+        /* In quiet mode, point stdout at /dev/null for non-interactive
+         * services so daemon chatter doesn't pollute the serial stream
+         * (breaks test pattern matching).  Keep stderr open — services that
+         * need serial visibility (e.g. DHCP) can log via stderr/dprintf.
+         * MUST reopen, never just close(1): with fd 1 free the service's
+         * next open() lands on fd 1, and stdio flushes then write into that
+         * file (this corrupted a media file before the kernel enforced fd
+         * access modes).
+         * Heuristic: not /bin/login and not /bin/bastion (the two
+         * interactive auth services). */
         if (s_quiet &&
             strcmp(s->run_cmd, "/bin/login") != 0 &&
-            strcmp(s->run_cmd, "/bin/bastion") != 0)
+            strcmp(s->run_cmd, "/bin/bastion") != 0) {
             close(1);
+            open("/dev/null", O_WRONLY);   /* lowest free fd → becomes 1 */
+        }
 
         /* Exec the binary directly when run_cmd is an absolute path — this
          * ensures exec_caps are applied to the target binary, not consumed
@@ -247,8 +281,15 @@ process_cmd(void)
 /* Installed systems carry the live ISO's installer binaries because the
  * install is a raw block copy of the live rootfs. Live boots are marked
  * with aegis_live=1 on the kernel cmdline (gen-limine-conf.sh); when the
- * marker is absent we are on an installed disk, so drop the installers
- * on first boot. Subsequent boots find nothing to remove and skip. */
+ * marker is absent we are on an installed disk, so drop the live-only state
+ * on first boot. Subsequent boots find nothing to remove and skip.
+ *
+ * "Live-only state" is (1) the installer binaries and (2) any /etc/aegis/autologin
+ * the live media shipped — an installed system MUST present the greeter, not
+ * inherit the live ISO's passwordless auto-login. This runs only on the first
+ * installed boot (gated by the installers-present check), so a user who later
+ * opts into autologin via Settings → Users keeps it: we drop only what the live
+ * media carried in, never a choice made on the running installed system. */
 static void
 remove_installers_if_installed(int is_live)
 {
@@ -266,14 +307,19 @@ remove_installers_if_installed(int is_live)
     for (unsigned i = 0; i < sizeof(paths) / sizeof(paths[0]); i++)
         unlink(paths[i]);
     rmdir("/apps/gui-installer");  /* empty bundle dir → invisible to scans */
+    /* Force the greeter on installed systems: strip any autologin the live
+     * media carried. Re-enabled per-user via Settings → Users. */
+    unlink("/etc/aegis/autologin");
     sync();
-    vigil_log("installed system: installers removed");
+    vigil_log("installed system: installers + live autologin removed");
 }
 
 int
 main(void)
 {
     int is_live = 0;
+
+    uboot_mark("vigil-enter");   /* PID 1 reached user space */
 
     /* Set the OS hostname (the kernel default is the generic "aegis"). The OS
      * owns its own identity, so init sets it here — uname()/Settings/the shell
@@ -360,6 +406,8 @@ main(void)
         }
         start_service(&s_svcs[i]);
     }
+
+    uboot_mark("services-spawned");   /* all boot-mode services fork+exec'd */
 
     while (!s_got_term) {
         if (s_got_usr1) {

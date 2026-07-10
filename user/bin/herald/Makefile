@@ -18,7 +18,13 @@ LDFLAGS = -static -no-pie -L$(BEARSSL)/lib -L$(BEARSSL)/lib64 -lbearssl
 SRCS = main.c tar.c verify.c manifest.c db.c net.c repo.c
 HDRS = tar.h verify.h manifest.h db.h net.h repo.h
 
-herald.elf: $(SRCS) $(HDRS)
+# OUT is overridable so cross-arch builds write to a distinct path. Sharing one
+# herald.elf let the arm64 build clobber the native binary; make then saw it as
+# up-to-date and the x86_64 rootfs silently shipped an AArch64 herald the kernel
+# rejects at exec ("not an ELF64 executable for this arch").
+OUT ?= herald.elf
+
+$(OUT): $(SRCS) $(HDRS)
 	$(CC) $(CFLAGS) -o $@ $(SRCS) $(LDFLAGS)
 
 clean:
