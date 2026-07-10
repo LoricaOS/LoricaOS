@@ -98,6 +98,8 @@ vendor/coreutils/bin/[       /bin/[
 vendor/coreutils/bin/find          /bin/find
 vendor/coreutils/bin/which        /bin/which
 vendor/coreutils/bin/uniq          /bin/uniq
+vendor/coreutils/bin/sed            /bin/sed
+vendor/coreutils/bin/less          /bin/less
 
 # Network / services
 user/bin/httpd/httpd.elf        /bin/httpd
