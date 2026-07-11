@@ -107,6 +107,7 @@ user/bin/nettest/nettest.elf    /bin/nettest
 user/bin/dltest/dltest.elf      /bin/dltest
 user/bin/perfbench-ipc/perfbench-ipc.elf /bin/perfbench-ipc
 user/bin/sockreftest/sockreftest.elf /bin/sockreftest
+user/bin/fdpasstest/fdpasstest.elf /bin/fdpasstest
 user/bin/captest/captest.elf    /bin/captest
 user/bin/selftest/selftest.elf  /bin/selftest
 # FFmpeg-port smoke test (cmdline-gated vigil service; media fetched into

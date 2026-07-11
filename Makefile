@@ -56,7 +56,7 @@ build-musl: $(MUSL_BUILT)
 # + tools/fetch-coreutils.sh. What stays here is the trusted base (init/shell/
 # login/auth/admin/system-control/network) and the in-tree test/stress suite.
 SIMPLE_USER_PROGS = \
-    shutdown reboot aegisctl login stsh httpd sshd nettest polltest poll-test sockreftest contresume spawnleak \
+    shutdown reboot aegisctl login stsh httpd sshd nettest polltest poll-test sockreftest fdpasstest contresume spawnleak \
     hostname ip \
     smpstress futexstress mmfaultstress elffuzz sysfuzz fduaf blkuaf extabtest vforkstress dltest captest cowtest stresstest \
     perfbench-ipc forkbench selftest ffsmoke
