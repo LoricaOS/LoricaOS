@@ -102,7 +102,19 @@ int main(void)
             continue;
         }
 
+        /* Count the child BEFORE fork: an after-fork `g_children++` raced the
+         * SIGCHLD reaper — a child that exited before the parent's ++ let the
+         * handler decrement first (guarded at 0), so the later ++ over-counted.
+         * The drift is monotonic and only climbs toward MAX_CHILDREN, eventually
+         * wedging accept() for good (a low-rate remote DoS). Incrementing first
+         * makes the reap always balance a real increment. */
+        g_children++;
         pid_t pid = fork();
+        if (pid < 0) {
+            g_children--;   /* fork failed: nothing will be reaped for it */
+            close(cli);
+            continue;
+        }
         if (pid == 0) {
             /* Child: connected socket becomes tinysshd's stdin/stdout. */
             char *argv[] = { "tinysshd", "-v", SSHKEYDIR, NULL };
@@ -119,7 +131,7 @@ int main(void)
             log_str("[SSHD] exec /bin/tinysshd failed\n");
             _exit(127);
         }
-        if (pid > 0) g_children++;
+        /* parent: already counted this child before fork */
         close(cli);
     }
     return 0;
