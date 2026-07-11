@@ -1,5 +1,23 @@
 # LoricaOS Changelog
 
+## 1.2.0 — 2026-07-11 (RELEASED)
+
+**"Runs your scripts."** Aegis kernel v1.2.0 + coreutils v1.1.0. Desktop + server
+ISOs published (github.com/LoricaOS/LoricaOS/releases/tag/v1.2.0).
+
+- **Kernel (Aegis v1.2.0):** `#!` shebang exec, hard links, `utimensat` + real ext2
+  inode timestamps (were always 0 → broke `make`/`git` incremental + `ls -l`),
+  `pwrite64` + OFD locks, `dup3`, relative-path exec (`./script`, `./configure`),
+  stat returns real times + link count.
+- **Hardening:** refuse admin-gated caps at the SERVICE tier; close SCM_RIGHTS /
+  fd-inheritance authority-laundering; close the install-protected-tree TOCTOU
+  (atomic check in the ext2 mutators).
+- **Audit sweep (6-agent):** ext2 alloc_block OOB, mmap AUTH bypass, MAP_FIXED
+  shared-frame free, USB-eth DMA clamp, HDA loop hang, PCI BAR UB, arm64
+  symlinkat, memfd/pipe SMP use-after-free, futex address-space key.
+- **Userland:** `sed`, `less`, `chmod` symbolic modes (coreutils v1.1.0); `stsh`
+  heredocs (`<<`, `<<-`).
+
 ## 1.1.0 — UNRELEASED (running)
 
 > **Status: not released.** The Claude Fable 5 security review is **done**
