@@ -1,1 +1,9 @@
-service AUTH
+# tinysshd — TinySSH is public-key-only (no password auth path; see
+# tools/build-tinyssh.sh). It therefore never reads /etc/shadow or
+# /etc/aegis/admin, so it must NOT hold CAP_KIND_AUTH: granting AUTH to the
+# most-exposed, most-complex remote-facing daemon means a pre-auth memory-safety
+# compromise in its KEX/packet parser would yield read access to the shadow
+# hashes + the admin credential (offline-cracking material for the whole
+# system). Least privilege: tinysshd needs only baseline caps (it operates the
+# socket fd handed in by the sshd frontend and reads its host keys via ordinary
+# VFS). Deliberately NO service-tier grants here.

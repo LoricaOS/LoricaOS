@@ -369,6 +369,26 @@ static int install_bytes(const unsigned char *buf, size_t len)
         return -1;
     }
 
+    /* Anti-rollback guard. herald's signature chain (signed Release → Packages
+     * SHA → package SHA) authenticates package CONTENT but not FRESHNESS, so a
+     * network MITM can replay an older, still-validly-signed Release+Packages
+     * +package to force a downgrade to a known-vulnerable version (a classic
+     * freeze/rollback attack, made easier by the unauthenticated `curl -k`
+     * transport). Refuse to replace an installed package with a strictly-older
+     * version; reinstalling the same version (repair) is allowed. A genuine
+     * intentional downgrade can set HERALD_ALLOW_DOWNGRADE=1. */
+    {
+        herald_db_entry_t cur;
+        if (db_find(m.id, &cur) == 1 &&
+            herald_version_gt(cur.version, m.version) &&
+            getenv("HERALD_ALLOW_DOWNGRADE") == NULL) {
+            fprintf(stderr, "herald: refusing to downgrade %s (%s installed, "
+                    "%s offered); set HERALD_ALLOW_DOWNGRADE=1 to override\n",
+                    m.id, cur.version, m.version);
+            return -1;
+        }
+    }
+
     /* System package (class=system): a first-party, signature-trusted package
      * (the desktop stack). Its signature is already verified — load_verified_pkg
      * for a local .hpkg, or the repo's Release-sig → Packages-hash → pkg-hash

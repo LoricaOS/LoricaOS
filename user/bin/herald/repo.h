@@ -35,6 +35,9 @@ int repo_sync(void);
  * verified Packages lists. 1 = found (fills *out), 0 = not found, <0 error. */
 int repo_find(const char *name, herald_stanza_t *out);
 
+/* Compare dotted-numeric versions; returns 1 iff a > b. */
+int herald_version_gt(const char *a, const char *b);
+
 /* Print every cached package whose name/display name matches `term`
  * ("" matches all). Returns 0, or negative if no synced lists exist. */
 int repo_search(const char *term);

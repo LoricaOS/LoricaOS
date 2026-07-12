@@ -75,10 +75,31 @@ int main(void)
         srv.sin_port = htons(NTP_PORT);
         inet_aton(NTP_SERVER, &srv.sin_addr);
 
-        /* NTP request: LI=0, VN=4, Mode=3 (client) */
+        /* NTP request: LI=0, VN=4, Mode=3 (client). Stamp a random 8-byte nonce
+         * into the transmit-timestamp field (bytes 40-47); a genuine server
+         * copies it verbatim into the response's ORIGINATE field (bytes 24-31).
+         * Verifying that echo below is what makes an off-path spoofer have to
+         * guess 64 bits — without it, chronos accepted ANY datagram and let an
+         * attacker set the wall clock arbitrarily (which drives TLS validity
+         * windows, cert/freshness checks, and log integrity). */
         unsigned char pkt[48];
+        unsigned char nonce[8];
         memset(pkt, 0, sizeof(pkt));
         pkt[0] = 0x23;  /* VN=4, Mode=3 */
+        {
+            int rfd = open("/dev/urandom", O_RDONLY);
+            if (rfd < 0 || read(rfd, nonce, sizeof(nonce)) != (ssize_t)sizeof(nonce)) {
+                /* Fall back to a monotonic+pid nonce rather than a predictable
+                 * all-zero one. */
+                struct timespec mono;
+                clock_gettime(CLOCK_MONOTONIC, &mono);
+                uint64_t m = (uint64_t)mono.tv_nsec ^ ((uint64_t)mono.tv_sec << 20)
+                             ^ ((uint64_t)getpid() << 40);
+                memcpy(nonce, &m, sizeof(nonce));
+            }
+            if (rfd >= 0) close(rfd);
+        }
+        memcpy(&pkt[40], nonce, sizeof(nonce));
 
         if (sendto(fd, pkt, 48, 0,
                    (struct sockaddr *)&srv, sizeof(srv)) != 48) {
@@ -88,13 +109,34 @@ int main(void)
             continue;
         }
 
-        /* Read response */
+        /* Read response, capturing the sender so we can reject datagrams that
+         * did not come from the server we queried. */
         memset(pkt, 0, sizeof(pkt));
-        int n = (int)recv(fd, pkt, 48, 0);
+        struct sockaddr_in from;
+        socklen_t fromlen = sizeof(from);
+        int n = (int)recvfrom(fd, pkt, 48, 0,
+                              (struct sockaddr *)&from, &fromlen);
         close(fd);
 
         if (n < 48) {
             fprintf(stderr, "chronos: short NTP response (%d bytes)\n", n);
+            sleep(60);
+            continue;
+        }
+
+        /* Source must be the NTP server:123 we queried. */
+        if (from.sin_addr.s_addr != srv.sin_addr.s_addr ||
+            from.sin_port != srv.sin_port) {
+            fprintf(stderr, "chronos: NTP response from unexpected source\n");
+            sleep(60);
+            continue;
+        }
+
+        /* Must be a server reply (Mode=4) and not an unsynchronized alarm
+         * (LI=3), and the ORIGINATE field must echo our nonce. */
+        if ((pkt[0] & 0x07) != 4 || (pkt[0] >> 6) == 3 ||
+            memcmp(&pkt[24], nonce, sizeof(nonce)) != 0) {
+            fprintf(stderr, "chronos: NTP response failed validation\n");
             sleep(60);
             continue;
         }
@@ -104,7 +146,11 @@ int main(void)
         memcpy(&ntp_sec, &pkt[40], 4);
         ntp_sec = ntohl_manual(ntp_sec);
 
-        if (ntp_sec < NTP_EPOCH_DIFF) {
+        /* Sanity-bound: reject a timestamp before the NTP epoch base or after a
+         * far-future ceiling (~year 2100) so a validated-but-absurd reply can't
+         * jump the clock wildly. 6.1e9 s past 1970 ≈ 2163. */
+        if (ntp_sec < NTP_EPOCH_DIFF ||
+            (uint64_t)ntp_sec - NTP_EPOCH_DIFF > 6100000000ULL) {
             fprintf(stderr, "chronos: invalid NTP timestamp\n");
             sleep(60);
             continue;
