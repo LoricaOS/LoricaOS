@@ -1,5 +1,28 @@
 # LoricaOS Changelog
 
+## 1.2.1 — 2026-07-12 (RELEASED)
+
+**Security & robustness point release.** Aegis kernel v1.2.1 + coreutils v1.1.0
+(unchanged). Four red-team rounds against the shipped 1.2.0 image found and fixed
+real bugs; the remote network RX stack held up under direct fuzzing.
+
+- **Password-less admin escalation — 5 holes closed (Aegis v1.2.1):** the
+  `aegisctl`/`sys_adminconf` confused deputy (gated on `POWER`+uid instead of an
+  admin session); ext2 DAC granting the cosmetic uid-0 session owner-write over
+  `/etc/passwd`/`/etc/group`; mutators (`rename`/`link`/`chmod`/…) bypassing the
+  `/etc/shadow`+`/etc/aegis/admin` AUTH gate; **parent-directory shadowing** (an
+  unprivileged `rename("/etc",…)` could swap the whole protected subtree for
+  attacker inodes) — now every ancestor of a protected path is immutable without
+  install authority; and `fchmod`/`fchown` skipping the sensitive-inode gate.
+- **Kernel freeze fix (Aegis v1.2.1):** an unprivileged `mmap`+`fork` of a large
+  map froze the whole kernel — the per-frame COW refcount was a fixed 65536-slot
+  hash that went O(n²) and panicked when full, walked with interrupts off. Replaced
+  with a dense O(1) per-frame refcount; large-memory COW `fork` now works.
+- **Network hardening (Aegis v1.2.1):** SYN-backlog cap scoped per-listener (was
+  global — one flooded port could starve every service); half-open connection
+  `sock_id` initialized (spurious slot-0 wake); `sshd` child-count race that could
+  wedge `accept()`.
+
 ## 1.2.0 — 2026-07-11 (RELEASED)
 
 **"Runs your scripts."** Aegis kernel v1.2.0 + coreutils v1.1.0. Desktop + server
