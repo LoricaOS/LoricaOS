@@ -194,6 +194,24 @@ static int recv_event(int fd, lumen_event_t *ev)
         ev->drop.path[sizeof(ev->drop.path) - 1] = '\0';
         break;
     }
+    case LUMEN_EV_WINDOW_LIST: {
+        static lumen_window_info_t s_wins[16];
+        int count = (int)(hdr.len / sizeof(lumen_window_info_t));
+        int cap = count > 16 ? 16 : count;
+        for (int i = 0; i < cap; i++)
+            if (lumen_read_full(fd, &s_wins[i], sizeof(s_wins[i])) != 0) return -1;
+        uint32_t rem = hdr.len - (uint32_t)cap * sizeof(lumen_window_info_t);
+        char tmp[256];
+        while (rem > 0) {
+            ssize_t r = read(fd, tmp,
+                             rem < (uint32_t)sizeof(tmp) ? rem : (uint32_t)sizeof(tmp));
+            if (r <= 0) return -1;
+            rem -= (uint32_t)r;
+        }
+        ev->windows.count = cap;
+        ev->windows.items = s_wins;
+        break;
+    }
     default: {
         char tmp[256];
         uint32_t rem = hdr.len;
@@ -385,6 +403,99 @@ void lumen_window_present(lumen_window_t *win)
     lumen_damage_t dmg  = { win->id };
     write(win->fd, &hdr, sizeof(hdr));
     write(win->fd, &dmg, sizeof(dmg));
+}
+
+/* Apply a server-initiated resize (received as LUMEN_EV_RESIZED). Asks the
+ * server for a fresh buffer at new_w×new_h and remaps shared+backbuf in place;
+ * win->w/h/stride are updated. Returns 0 on success, -1 on failure (window
+ * left at its old size). The caller must rebuild its surface_t (it points at
+ * the new backbuf) and repaint.
+ *
+ * ponytail: assumes the RESIZE_BUFFER reply is the next message on the socket
+ * (the server handles it synchronously, like CREATE_WINDOW). True today; if the
+ * server ever interleaves events before the reply, this needs a queue. */
+/* Receive a resize reply (lumen_window_created_t + new memfd via SCM_RIGHTS) and
+ * remap win->shared/backbuf in place. Shared by apply_resize (server-initiated)
+ * and resize_self (client-initiated) — both send a request, then read this. */
+static int recv_buffer_reply(lumen_window_t *win)
+{
+    lumen_msg_hdr_t rhdr;
+    lumen_window_created_t created;
+    char cmsgbuf[CMSG_SPACE(sizeof(int))];
+    struct iovec iov[2] = {
+        { .iov_base = &rhdr,    .iov_len = sizeof(rhdr)    },
+        { .iov_base = &created, .iov_len = sizeof(created) },
+    };
+    struct msghdr msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_iov = iov; msg.msg_iovlen = 2;
+    msg.msg_control = cmsgbuf; msg.msg_controllen = sizeof(cmsgbuf);
+    if (recvmsg(win->fd, &msg, 0) < 0 || created.status != 0) {
+        lumen_diag("[LUMEN-CLI] resize: recvmsg errno=%d status=%u\n",
+                   errno, created.status);
+        return -1;
+    }
+
+    int memfd = -1;
+    struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
+    if (cmsg && cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS)
+        memcpy(&memfd, CMSG_DATA(cmsg), sizeof(int));
+    if (memfd < 0) { lumen_diag("[LUMEN-CLI] resize: no memfd\n"); return -1; }
+
+    size_t nbufsz = (size_t)created.width * created.height * sizeof(uint32_t);
+    void *nshared = mmap(NULL, nbufsz, PROT_READ | PROT_WRITE, MAP_SHARED, memfd, 0);
+    if (nshared == MAP_FAILED) { close(memfd); return -1; }
+    void *nback = malloc(nbufsz);
+    if (!nback) { munmap(nshared, nbufsz); close(memfd); return -1; }
+    memset(nback, 0, nbufsz);
+
+    munmap(win->shared, (size_t)win->w * win->h * sizeof(uint32_t));
+    close(win->memfd);
+    free(win->backbuf);
+    win->memfd  = memfd;
+    win->shared = nshared;
+    win->backbuf = nback;
+    win->w = (int)created.width;
+    win->h = (int)created.height;
+    win->stride = (int)created.width;
+    win->x = created.x;
+    win->y = created.y;
+    return 0;
+}
+
+/* ponytail: assumes the reply is the next message on the socket (the server
+ * handles it synchronously, like CREATE_WINDOW). True today; if the server ever
+ * interleaves events before the reply, this needs a queue. */
+int lumen_window_apply_resize(lumen_window_t *win, int new_w, int new_h)
+{
+    if (!win || new_w < 1 || new_h < 1) return -1;
+    lumen_msg_hdr_t hdr = { LUMEN_OP_RESIZE_BUFFER, sizeof(lumen_resize_buffer_t) };
+    lumen_resize_buffer_t req = { win->id, (uint32_t)new_w, (uint32_t)new_h };
+    if (write(win->fd, &hdr, sizeof(hdr)) != (ssize_t)sizeof(hdr) ||
+        write(win->fd, &req, sizeof(req)) != (ssize_t)sizeof(req)) {
+        lumen_diag("[LUMEN-CLI] resize: write errno=%d\n", errno);
+        return -1;
+    }
+    return recv_buffer_reply(win);
+}
+
+int lumen_window_resize_self(lumen_window_t *win, int w, int h)
+{
+    if (!win || w < 1 || h < 1) return -1;
+    lumen_msg_hdr_t hdr = { LUMEN_OP_RESIZE_SELF, sizeof(lumen_resize_self_t) };
+    lumen_resize_self_t req = { (uint32_t)w, (uint32_t)h };
+    if (write(win->fd, &hdr, sizeof(hdr)) != (ssize_t)sizeof(hdr) ||
+        write(win->fd, &req, sizeof(req)) != (ssize_t)sizeof(req))
+        return -1;
+    return recv_buffer_reply(win);
+}
+
+void lumen_activate_window(int fd, uint32_t gid)
+{
+    lumen_msg_hdr_t hdr = { LUMEN_OP_ACTIVATE_WINDOW, sizeof(lumen_activate_window_t) };
+    lumen_activate_window_t req = { gid };
+    write(fd, &hdr, sizeof(hdr));
+    write(fd, &req, sizeof(req));
 }
 
 int lumen_poll_event(int fd, lumen_event_t *ev)

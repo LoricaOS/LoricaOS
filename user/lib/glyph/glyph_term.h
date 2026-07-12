@@ -26,6 +26,21 @@
 #define GLYPH_TERM_ATTR_UNDERLINE 0x04
 #define GLYPH_TERM_ATTR_REVERSE   0x08
 
+/* Cursor shapes (glyph_term_set_cursor_style). */
+#define GLYPH_TERM_CURSOR_BLOCK     0
+#define GLYPH_TERM_CURSOR_BEAM      1
+#define GLYPH_TERM_CURSOR_UNDERLINE 2
+
+/* Color scheme: 16 ANSI colors + defaults. A field == GLYPH_TERM_DYN means
+ * "follow the live desktop theme" (used by the default scheme so it stays
+ * frosted/light-dark aware); anything else is a fixed 0x00RRGGBB. */
+#define GLYPH_TERM_DYN 0xFFFFFFFEu
+typedef struct {
+    const char *name;
+    uint32_t ansi[16];
+    uint32_t fg, bg, cursor, selection;
+} glyph_term_theme_t;
+
 typedef struct {
     char ch;
     uint32_t fg;    /* 0xRRGGBB or GLYPH_TERM_DEFAULT_COLOR */
@@ -70,12 +85,39 @@ typedef struct {
      * reports the flag to Lumen so it tints the window titlebar red. */
     int  admin;
     int  admin_changed;
+    /* Runtime-configurable settings (defaults set by glyph_term_create). */
+    const glyph_term_theme_t *theme;  /* active color scheme */
+    int  cursor_style;   /* GLYPH_TERM_CURSOR_* */
+    int  cursor_blink;   /* 1 = blink, 0 = steady */
+    int  font_px;        /* glyph size used to render cells */
+    int  scrollback;     /* history lines above the visible area */
 } glyph_term_t;
 
 /* Lifecycle */
 glyph_term_t *glyph_term_create(int cols, int rows, int cell_w, int cell_h,
                                 int pad_x, int pad_y);
 void glyph_term_destroy(glyph_term_t *t);
+
+/* Resize the grid to new cols×rows with new cell metrics (font-size change or
+ * window resize). Reallocs the ring buffer preserving the top-left overlap,
+ * clamps the cursor, and pushes the new size to the PTY via TIOCSWINSZ.
+ * Returns 0 on success, -1 on alloc failure (grid unchanged). */
+int glyph_term_resize(glyph_term_t *t, int cols, int rows,
+                      int cell_w, int cell_h, int font_px);
+
+/* Runtime settings. set_theme takes a built-in scheme index (clamped). */
+void glyph_term_set_theme(glyph_term_t *t, int scheme);
+void glyph_term_set_cursor_style(glyph_term_t *t, int style);
+void glyph_term_set_cursor_blink(glyph_term_t *t, int on);
+/* Push current cols/rows to the PTY (TIOCSWINSZ). Call once after setting
+ * master_fd; resize re-applies it automatically. */
+void glyph_term_apply_winsize(glyph_term_t *t);
+
+/* Built-in color scheme registry (for a settings picker). preview returns a
+ * representative background color for a swatch. */
+int         glyph_term_theme_count(void);
+const char *glyph_term_theme_name(int scheme);
+uint32_t    glyph_term_theme_preview(int scheme);
 
 /* Output path: feed PTY bytes through the escape parser into the grid.
  * Caller marks dirty / presents afterwards. */
