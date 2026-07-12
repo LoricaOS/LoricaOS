@@ -1,5 +1,36 @@
 # LoricaOS Changelog
 
+## 1.2.2 — 2026-07-12 (RELEASED)
+
+**Security & robustness point release.** Aegis kernel v1.2.2 + coreutils v1.1.0
+(unchanged). A second authorized red-team/audit pass against the shipped 1.2.1
+image found and fixed kernel- and userland-level issues; no new features.
+
+- **Kernel (Aegis v1.2.2):** closed an SMP TOCTOU that let a concurrent symlink
+  swap race the write-open of a trusted binary (e.g. `/bin/login`); pinned the
+  backing object across every blocking socket/pipe/pty I/O op so a concurrent
+  `close()` on a shared fd can't trigger a use-after-free; dropped
+  `CAP_KIND_PROC_READ` from the baseline grant (cross-PID `/proc` snooping now
+  needs an explicit capability); replaced the single-global vfork freeze with a
+  proper per-tgid set (SMP address-space safety); RST + reclaim completed-but-
+  unaccepted TCP connections instead of leaking the conn table; and bounded an
+  ext2 dirent read against a crafted image. See the Aegis v1.2.2 notes.
+- **login `-elevate` brute-force throttle:** the admin-elevation path (the sole
+  gate for admin authority) was unthrottled — any unprivileged process could
+  `fork`/`exec` `login -elevate` in a loop feeding password guesses. Now a
+  mandatory per-failure delay, held under a serializing lock, paces it to one
+  guess per interval regardless of parallelism.
+- **tinysshd least-privilege:** removed `CAP_KIND_AUTH` from the pubkey-only SSH
+  daemon (it never reads `/etc/shadow`), so a pre-auth compromise of the most-
+  exposed remote service no longer reaches the shadow hashes / admin credential.
+- **chronos SNTP hardening:** validate the response source, mode, and a random
+  origin-timestamp echo before setting the clock (was accepting any datagram).
+- **herald anti-rollback:** refuse downgrading an installed package (defends the
+  MITM replay-an-old-signed-release attack over the unauthenticated transport).
+- **auth/credentials:** `/etc/shadow` lookup no longer truncates past ~19
+  accounts (bounded whole-file buffer → line-by-line scan); salt generation
+  fails closed instead of emitting a predictable all-zero salt.
+
 ## 1.2.1 — 2026-07-12 (RELEASED)
 
 **Security & robustness point release.** Aegis kernel v1.2.1 + coreutils v1.1.0

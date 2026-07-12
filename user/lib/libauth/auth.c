@@ -53,36 +53,31 @@ auth_lookup_passwd(const char *username, int *uid, int *gid,
 int
 auth_lookup_shadow(const char *username, char *hash, int hashlen)
 {
-    int fd = open("/etc/shadow", O_RDONLY);
-    if (fd < 0) return -1;
-    char filebuf[2048];
-    int total = 0, n;
-    while ((n = (int)read(fd, filebuf + total,
-                          (size_t)((int)sizeof(filebuf) - total - 1))) > 0)
-        total += n;
-    close(fd);
-    filebuf[total] = '\0';
-
-    char *line = filebuf;
-    while (line && *line) {
-        char *end = strchr(line, '\n');
-        if (end) *end = '\0';
+    /* Scan /etc/shadow line-by-line rather than slurping it into a fixed buffer.
+     * The old 2048-byte read silently truncated the file past ~19 SHA-512
+     * accounts, so trailing users could not log in with a correct password (and
+     * a cut mid-line risked a corrupt compare). One shadow entry is far under
+     * 1 KB (username + $6$ hash + aging fields), so a per-line buffer handles
+     * any number of accounts with bounded memory. */
+    FILE *fp = fopen("/etc/shadow", "r");
+    if (!fp) return -1;
+    char line[1024];
+    while (fgets(line, sizeof(line), fp)) {
+        char *nl = strchr(line, '\n');
+        if (nl) *nl = '\0';
         char *colon = strchr(line, ':');
-        if (colon) {
-            *colon = '\0';
-            if (strcmp(line, username) == 0) {
-                char *h = colon + 1;
-                char *hend = strchr(h, ':');
-                if (hend) *hend = '\0';
-                strncpy(hash, h, (size_t)hashlen - 1);
-                hash[hashlen - 1] = '\0';
-                return 0;
-            }
-            *colon = ':';
-        }
-        if (!end) break;
-        line = end + 1;
+        if (!colon) continue;
+        *colon = '\0';
+        if (strcmp(line, username) != 0) continue;
+        char *h = colon + 1;
+        char *hend = strchr(h, ':');
+        if (hend) *hend = '\0';
+        strncpy(hash, h, (size_t)hashlen - 1);
+        hash[hashlen - 1] = '\0';
+        fclose(fp);
+        return 0;
     }
+    fclose(fp);
     return -1;
 }
 

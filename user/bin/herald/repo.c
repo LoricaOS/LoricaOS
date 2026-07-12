@@ -98,8 +98,9 @@ static int next_line(const char *buf, size_t len, size_t *off, char *line, size_
     return 1;
 }
 
-/* Compare dotted-numeric versions; 1 if a > b. */
-static int version_gt(const char *a, const char *b)
+/* Compare dotted-numeric versions; 1 if a > b. Exposed (herald_version_gt) so
+ * the installer can enforce the anti-rollback guard. */
+int herald_version_gt(const char *a, const char *b)
 {
     while (*a || *b) {
         long na = 0, nb = 0;
@@ -322,7 +323,7 @@ int repo_find(const char *name, herald_stanza_t *out)
                 continue;
             if (st.arch[0] && strcmp(st.arch, HERALD_ARCH) != 0)
                 continue;
-            if (!found || version_gt(st.version, out->version)) {
+            if (!found || herald_version_gt(st.version, out->version)) {
                 strncpy(st.base_url, srcs[i].url, sizeof(st.base_url) - 1);
                 st.base_url[sizeof(st.base_url) - 1] = '\0';
                 *out = st;

@@ -14,6 +14,7 @@
 #include <termios.h>
 #include <sys/types.h>
 #include <sys/syscall.h>
+#include <sys/file.h>
 
 #include "auth.h"
 
@@ -24,6 +25,9 @@ extern char **environ;
 
 #define SYS_ADMIN_SESSION 517
 #define ADMIN_CRED_FILE   "/etc/aegis/admin"
+/* Serializes admin-elevation attempts so a mandatory per-failure delay can't be
+ * outrun by spawning `login -elevate` in parallel (see do_elevate). */
+#define ELEVATE_LOCK      "/run/aegis-elevate.lock"
 
 /* Read a line from fd, stripping trailing newline. */
 static int
@@ -57,6 +61,19 @@ do_elevate(void)
     char stored[256];
     char password[128];
     int fd, n, ok;
+
+    /* Throttle brute force. do_elevate is the SOLE gate for admin authority, yet
+     * (unlike the interactive login loop) it was unthrottled: any unprivileged
+     * process could fork/exec `login -elevate` in a loop, feeding password
+     * guesses over a pipe, and online-brute-force the admin credential. Two
+     * defenses: (1) hold a global exclusive lock for the whole attempt so
+     * parallel `login -elevate` spawns serialize instead of racing; (2) a
+     * mandatory sleep on every failure — paid before the lock is released, so a
+     * re-exec loop is paced to one guess per FAIL_DELAY no matter how it is
+     * driven. The lock releases when this short-lived process exits. */
+    int lockfd = open(ELEVATE_LOCK, O_CREAT | O_RDWR, 0600);
+    if (lockfd >= 0)
+        flock(lockfd, LOCK_EX);
 
     fd = open(ADMIN_CRED_FILE, O_RDONLY);
     if (fd < 0) {
@@ -103,6 +120,7 @@ do_elevate(void)
     memset(password, 0, sizeof(password));
     if (!ok) {
         dprintf(2, "login: admin authentication failed\n");
+        sleep(FAIL_DELAY);   /* mandatory throttle, held under the elevate lock */
         return 1;
     }
 

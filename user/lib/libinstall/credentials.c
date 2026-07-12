@@ -38,18 +38,27 @@ int install_username_valid(const char *username)
 
 /* ── Salt generation (file-local) ───────────────────────────────────── */
 
-static void generate_salt(char *buf, int bufsize)
+/* Returns 0 on success, -1 if a cryptographically-random salt could not be
+ * produced. FAILS CLOSED: the old code fell back to an all-zero salt when
+ * /dev/urandom was unavailable (or on a short read it left rand_bytes
+ * uninitialized), so identical passwords hashed identically and the salt was
+ * precomputable. A predictable salt is worse than a hard error — refuse. */
+static int generate_salt(char *buf, int bufsize)
 {
     static const char b64[] =
         "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
     uint8_t rand_bytes[12];
     int fd = open("/dev/urandom", O_RDONLY);
-    if (fd >= 0) {
-        read(fd, rand_bytes, sizeof(rand_bytes));
-        close(fd);
-    } else {
-        memset(rand_bytes, 0, sizeof(rand_bytes));
-    }
+    if (fd < 0)
+        return -1;
+    int got = 0, r;
+    while (got < (int)sizeof(rand_bytes) &&
+           (r = (int)read(fd, rand_bytes + got,
+                          sizeof(rand_bytes) - (size_t)got)) > 0)
+        got += r;
+    close(fd);
+    if (got != (int)sizeof(rand_bytes))
+        return -1;   /* short read → no weak/predictable salt */
 
     int pos = 0;
     int i;
@@ -60,6 +69,7 @@ static void generate_salt(char *buf, int bufsize)
         buf[pos++] = b64[rand_bytes[i] % 64];
     buf[pos++] = '$';
     buf[pos] = '\0';
+    return 0;
 }
 
 /* ── Public: install_hash_password ──────────────────────────────────── */
@@ -69,7 +79,8 @@ int install_hash_password(const char *password, char *out, int outsz)
     if (!password || !out || outsz < 128)
         return -1;
     char salt[32];
-    generate_salt(salt, sizeof(salt));
+    if (generate_salt(salt, sizeof(salt)) != 0)
+        return -1;   /* fail closed: no predictable-salt hash */
     char *hashed = crypt(password, salt);
     if (!hashed)
         return -1;
