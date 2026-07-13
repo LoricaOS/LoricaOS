@@ -656,8 +656,17 @@ run_simple(int *pi, int run)
         return g_last_exit;
     }
 
-    /* external: reuse the tested single-stage pipeline path (handles its own redirs) */
-    run_pipeline(&cmd, 1, env_as_array(), &g_last_exit);
+    /* external: reuse the tested single-stage pipeline path (handles its own redirs).
+     * If followed by '&' the caller (run_list) will consume the T_AMP, but we
+     * peek at it here to choose the non-waiting background path.  Builtins and
+     * functions run in-process and can't be backgrounded, so '&' after them
+     * is a no-op (they run foreground, as before). */
+    if (T[*pi].type == T_AMP) {
+        run_pipeline_bg(&cmd, 1, env_as_array());
+        g_last_exit = 0;
+    } else {
+        run_pipeline(&cmd, 1, env_as_array(), &g_last_exit);
+    }
     return g_last_exit;
 }
 
@@ -944,6 +953,14 @@ run_pipeline_node(int *pi, int run, int in_loop)
     *pi=i;
     (void)argused;
     if (!run) return g_last_exit;
+    /* Background '&': run the pipeline without waiting (SIGCHLD=SIG_IGN
+     * auto-reaps children).  Same peek-after-parse pattern as run_simple. */
+    if (T[i].type == T_AMP) {
+        if (nc==1) { run_pipeline_bg(&cmds[0],1,env_as_array()); }
+        else       { run_pipeline_bg(cmds, nc, env_as_array()); }
+        g_last_exit = 0;
+        return g_last_exit;
+    }
     if (nc==1) { run_pipeline(&cmds[0],1,env_as_array(),&g_last_exit); return g_last_exit; }
     run_pipeline(cmds, nc, env_as_array(), &g_last_exit);
     return g_last_exit;
@@ -973,11 +990,12 @@ run_list(int *pi, int run, int in_loop)
     for (;;) {
         skip_seps(&i);
         if (at_block_end(i) || T[i].type==T_EOF) break;
-        int bg_prev = 0; (void)bg_prev;
         status = run_and_or(&i, run, in_loop);
         if (g_flow!=FLOW_NONE) break;                 /* unwind loops/functions */
-        /* background '&' */
-        if (T[i].type==T_AMP) i++;                    /* ponytail: '&' runs foreground */
+        /* background '&': run_and_or already peeked at the trailing T_AMP and
+         * dispatched the pipeline via run_pipeline_bg (non-waiting).  Consume
+         * the token here so the next command is its own statement. */
+        if (T[i].type==T_AMP) i++;
         else if (T[i].type==T_SEMI || T[i].type==T_NEWLINE) { /* consumed by skip_seps */ }
         else if (at_block_end(i)) break;
     }
