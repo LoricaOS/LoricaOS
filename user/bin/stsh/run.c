@@ -436,7 +436,7 @@ shell_builtin(char **argv, int argc)
         for (int i=0;i+n<g_nparams;i++) g_params[i]=g_params[i+n];
         g_nparams-=n; g_last_exit=0; return 1;
     }
-    if (!strcmp(c,"unset")) { for (int i=1;i<argc;i++) env_set(argv[i],""); g_last_exit=0; return 1; }
+    if (!strcmp(c,"unset")) { for (int i=1;i<argc;i++) env_unset(argv[i]); g_last_exit=0; return 1; }
     if (!strcmp(c,"export")) {
         if (argc<2) { env_print_all(); }
         else for (int i=1;i<argc;i++){ char *eq=strchr(argv[i],'='); if(eq){*eq='\0';env_set(argv[i],eq+1);*eq='=';} }

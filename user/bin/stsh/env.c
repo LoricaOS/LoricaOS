@@ -71,6 +71,33 @@ env_set(const char *key, const char *value)
 }
 
 /*
+ * env_unset — remove a KEY=VALUE pair entirely.  Returns 0 if the key was
+ * found and removed, -1 if it was not present.
+ */
+int
+env_unset(const char *key)
+{
+    int klen = (int)strlen(key);
+    for (int i = 0; i < s_env_count; i++) {
+        if (strncmp(s_env_store[i], key, klen) == 0 &&
+            s_env_store[i][klen] == '=') {
+            /* shift remaining entries down */
+            for (int j = i; j < s_env_count - 1; j++) {
+                /* move the string content... */
+                memmove(s_env_store[j], s_env_store[j + 1],
+                        sizeof(s_env_store[0]));
+                /* ...and fix the pointer (it already points into s_env_store[j]) */
+                s_env_ptrs[j] = s_env_store[j];
+            }
+            s_env_count--;
+            s_env_ptrs[s_env_count] = NULL;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+/*
  * env_print_all — print all environment variables.
  */
 void
