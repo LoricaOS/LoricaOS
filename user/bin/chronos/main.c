@@ -1,4 +1,4 @@
-/* chronos — Simple SNTP time synchronization daemon for Aegis.
+/* chronos — Simple SNTP time synchronization daemon for LoricaOS.
  *
  * Sends NTP requests to time.google.com (216.239.35.0:123),
  * extracts the transmit timestamp, and sets the kernel wall clock

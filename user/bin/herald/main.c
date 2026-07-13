@@ -1,5 +1,5 @@
 /*
- * herald — Aegis package manager.
+ * herald — LoricaOS package manager.
  *
  * A herald bears trusted, signed software from beyond the walls. It verifies a
  * package's ECDSA-P256/SHA-256 signature against a baked-in trusted key,

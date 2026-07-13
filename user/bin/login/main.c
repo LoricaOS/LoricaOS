@@ -1,4 +1,4 @@
-/* login — text-mode login binary for Aegis.
+/* login — text-mode login binary for LoricaOS.
  *
  * Authenticates via libauth.a, then execve's the user's shell.
  * Capabilities: AUTH and SETUID from kernel policy table (service tier).
