@@ -88,6 +88,7 @@ int  sh_incomplete(const char *buf);             /* interactive: needs more inpu
 void        env_init(char **envp);
 const char *env_get(const char *key);
 void        env_set(const char *key, const char *value);
+int         env_unset(const char *key);   /* remove a var entirely; 0=found, -1=absent */
 void        env_print_all(void);
 char      **env_as_array(void);
 void        env_expand(const char *src, char *dst, int dstlen, int last_exit);
