@@ -69,7 +69,7 @@ main(void)
     const char *req =
         "GET / HTTP/1.0\r\n"
         "Host: 1.1.1.1\r\n"
-        "User-Agent: Aegis/nettest\r\n"
+        "User-Agent: LoricaOS/nettest\r\n"
         "Connection: close\r\n"
         "\r\n";
     int rlen = (int)strlen(req);

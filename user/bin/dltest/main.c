@@ -111,7 +111,7 @@ main(void)
     const char *req =
         "GET /ttest.bin HTTP/1.0\r\n"
         "Host: herald.byexec.com\r\n"
-        "User-Agent: Aegis/dltest\r\n"
+        "User-Agent: LoricaOS/dltest\r\n"
         "Connection: close\r\n"
         "\r\n";
     int rlen = (int)strlen(req);
