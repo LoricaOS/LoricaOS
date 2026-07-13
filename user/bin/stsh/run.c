@@ -395,7 +395,7 @@ is_builtin_name(const char *n)
 {
     static const char *b[] = { "cd","exit","export","unset","set","read","shift",
         "return","break","continue",":","true","false",".","source","exec","env",
-        "command","caps","sandbox","grant","admin","deadmin","help",0 };
+        "command","umask","type","caps","sandbox","grant","admin","deadmin","help",0 };
     for (int i=0;b[i];i++) if(!strcmp(n,b[i])) return 1;
     return 0;
 }
@@ -476,10 +476,50 @@ shell_builtin(char **argv, int argc)
         return 1;
     }
     if (!strcmp(c,"exec") && argv[1]) {
-        char full[256];
-        if (argv[1][0]!='/'){ snprintf(full,sizeof full,"/bin/%s",argv[1]); execve(full,&argv[1],env_as_array()); }
-        else execve(argv[1],&argv[1],env_as_array());
+        char full[512];
+        if (argv[1][0]!='/') {
+            if (!find_in_path(argv[1], full, sizeof full)) {
+                fprintf(stderr,"exec: %s: not found\n",argv[1]); g_last_exit=127; return 1;
+            }
+            execve(full, &argv[1], env_as_array());
+        } else
+            execve(argv[1], &argv[1], env_as_array());
         fprintf(stderr,"exec: %s: %s\n",argv[1],strerror(errno)); g_last_exit=127; return 1;
+    }
+    if (!strcmp(c,"umask")) {
+        /* umask [mode] — set or print the file-creation mask.  No arg prints the
+         * current umask as an octal string.  A numeric arg (octal by POSIX
+         * convention) sets it.  Returns 0 on success. */
+        if (argc < 2) {
+            mode_t m = umask(0);
+            umask(m);
+            printf("%03o\n", (unsigned)m);
+        } else {
+            mode_t m = (mode_t)strtol(argv[1], NULL, 8);
+            umask(m);
+        }
+        g_last_exit=0; return 1;
+    }
+    if (!strcmp(c,"type")) {
+        /* type name... — print how each name would be resolved.  Exit 0 if all
+         * found, 1 if any not found. */
+        int rc = 0;
+        for (int i = 1; i < argc; i++) {
+            const char *nm = argv[i];
+            char rp[512];
+            if (func_find(nm))
+                printf("%s is a function\n", nm);
+            else if (is_builtin_name(nm))
+                printf("%s is a shell builtin\n", nm);
+            else if (find_in_path(nm, rp, sizeof rp))
+                printf("%s is %s\n", nm, rp);
+            else {
+                fprintf(stderr,"type: %s: not found\n", nm);
+                rc = 1;
+            }
+        }
+        g_last_exit = rc;
+        return 1;
     }
     if (!strcmp(c,"env"))  { env_print_all(); g_last_exit=0; return 1; }
     if (!strcmp(c,"help")) { puts("stsh: POSIX-ish shell (if/for/while/case, functions, globbing)"); g_last_exit=0; return 1; }
