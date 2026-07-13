@@ -243,7 +243,9 @@ run_pipeline(cmd_t *cmds, int n, char **envp, int *last_exit)
 
 /*
  * run_pipeline_bg — like run_pipeline but returns immediately without waiting.
- * SIGCHLD is SIG_IGN in the shell, so children are auto-reaped by the kernel.
+ * Aegis does not auto-reap on SIGCHLD=SIG_IGN (a zombie persists until an
+ * explicit waitpid), so run_list()'s per-statement loop drains WNOHANG to
+ * collect these children instead.
  */
 void
 run_pipeline_bg(cmd_t *cmds, int n, char **envp)
@@ -317,7 +319,7 @@ run_pipeline_bg(cmd_t *cmds, int n, char **envp)
         close(pipes[j][0]);
         close(pipes[j][1]);
     }
-    /* Parent returns — SIGCHLD=SIG_IGN means children auto-reap */
+    /* Parent returns without waiting — run_list()'s WNOHANG drain reaps these. */
 }
 
 /*

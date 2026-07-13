@@ -101,9 +101,6 @@ main(int argc, char **argv, char **envp)
     for (;;) {
         char prompt[512];
 
-        while (waitpid(-1, NULL, WNOHANG) > 0)   /* reap background jobs */
-            ;
-
         if (acc_len == 0)
             build_prompt(prompt, sizeof(prompt));
         else
