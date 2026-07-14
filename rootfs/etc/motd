@@ -1,5 +1,5 @@
 
- LoricaOS __AEGIS_VERSION__
+ LoricaOS __LORICA_VERSION__
 
  This is v1 software -- a first public release, not
  production-hardened. The C kernel likely contains real,

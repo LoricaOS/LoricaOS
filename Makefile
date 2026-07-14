@@ -8,9 +8,16 @@
 AEGIS_OS_VERSION := $(shell cat VERSION 2>/dev/null || echo 0.0.0)
 # The Aegis kernel version this OS build runs on (fetched, not built).
 KERNEL_VERSION   := $(shell cat KERNEL_VERSION 2>/dev/null || echo 0.0.0)
-# build-rootfs.sh reads AEGIS_VERSION for the motd/About strings.
-AEGIS_VERSION    := $(AEGIS_OS_VERSION)
-export AEGIS_VERSION
+# build-rootfs.sh reads LORICA_VERSION for the motd/About strings. Deliberately
+# NOT named AEGIS_VERSION: the aegis kernel repo's own Makefile already uses
+# that exact name for the KERNEL's version (an unrelated number — OS and
+# kernel versions are independent, per the note above) — every component
+# repo's own Makefile (lumen, bastion, ...) also uses AEGIS_VERSION for ITS
+# OWN version. Three different meanings under one name was the direct cause
+# of lumen's About window showing its own component version instead of the
+# actual LoricaOS release.
+LORICA_VERSION   := $(AEGIS_OS_VERSION)
+export LORICA_VERSION
 
 BUILD  = build
 # Two production profiles share one source tree (Phase 1 of the graphical peel):
