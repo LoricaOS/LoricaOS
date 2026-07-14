@@ -90,23 +90,27 @@ for SK in "${SKELETONS[@]}"; do
     done < <(find "$SK" -type d -print0 | sort -z)
 done
 
-# Second pass: copy all files. /etc/motd carries the __AEGIS_VERSION__ placeholder
-# (single source of truth: the AEGIS_VERSION exported by the Makefile from git) —
-# substitute it at pack time so the login banner always matches the real version.
-MOTD_TMP=""
+# Second pass: copy all files. /etc/motd and /etc/lorica-version carry the
+# __LORICA_VERSION__ placeholder (single source of truth: LORICA_VERSION,
+# exported by the Makefile from the top-level VERSION file — deliberately NOT
+# named AEGIS_VERSION, see the Makefile's comment) — substitute it at pack
+# time so the login banner AND any component reading /etc/lorica-version
+# (e.g. lumen's About window, which used to show its own component version
+# instead of the actual LoricaOS release) always match the real version.
+SUBST_TMP=""
 for SK in "${SKELETONS[@]}"; do
     while IFS= read -r -d '' file; do
         rel="${file#$SK}"
-        if [[ "$rel" == "/etc/motd" ]]; then
-            MOTD_TMP="$(mktemp)"
-            sed "s/__AEGIS_VERSION__/${AEGIS_VERSION:-untracked}/g" "$file" > "$MOTD_TMP"
-            debugfs_run "write $MOTD_TMP $rel"
+        if [[ "$rel" == "/etc/motd" || "$rel" == "/etc/lorica-version" ]]; then
+            SUBST_TMP="$(mktemp)"
+            sed "s/__LORICA_VERSION__/${LORICA_VERSION:-untracked}/g" "$file" > "$SUBST_TMP"
+            debugfs_run "write $SUBST_TMP $rel"
+            rm -f "$SUBST_TMP"
         else
             debugfs_run "write $file $rel"
         fi
     done < <(find "$SK" -type f -print0 | sort -z)
 done
-[[ -n "$MOTD_TMP" ]] && rm -f "$MOTD_TMP"
 
 # ── Process manifest: copy binaries ─────────────────────────────────────────
 echo "[rootfs] Installing binaries from manifest..."
