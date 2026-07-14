@@ -993,8 +993,9 @@ run_pipeline_node(int *pi, int run, int in_loop)
     *pi=i;
     (void)argused;
     if (!run) return g_last_exit;
-    /* Background '&': run the pipeline without waiting (SIGCHLD=SIG_IGN
-     * auto-reaps children).  Same peek-after-parse pattern as run_simple. */
+    /* Background '&': run the pipeline without waiting (run_list's per-
+     * statement loop reaps it with WNOHANG once it exits).  Same peek-after-
+     * parse pattern as run_simple. */
     if (T[i].type == T_AMP) {
         if (nc==1) { run_pipeline_bg(&cmds[0],1,env_as_array()); }
         else       { run_pipeline_bg(cmds, nc, env_as_array()); }
@@ -1032,6 +1033,15 @@ run_list(int *pi, int run, int in_loop)
         if (at_block_end(i) || T[i].type==T_EOF) break;
         status = run_and_or(&i, run, in_loop);
         if (g_flow!=FLOW_NONE) break;                 /* unwind loops/functions */
+        /* Reap finished background jobs between statements. This is the one
+         * loop every entry point (REPL, -c, run_script, source, loop bodies)
+         * funnels through, so it's the only place a WNOHANG drain is needed —
+         * SIGCHLD=SIG_IGN does NOT auto-reap on Aegis (zombies persist until
+         * waitpid), so without this a script that backgrounds jobs leaks one
+         * zombie per job for its whole runtime. */
+        if (run)
+            while (waitpid(-1, NULL, WNOHANG) > 0)
+                ;
         /* background '&': run_and_or already peeked at the trailing T_AMP and
          * dispatched the pipeline via run_pipeline_bg (non-waiting).  Consume
          * the token here so the next command is its own statement. */
