@@ -250,7 +250,7 @@ build_stsh() {
     log "building stsh (→ $out as blob name 'shell')"
     mkdir -p "$BLOB_OUT"
     local srcs=()
-    for f in main.c editor.c history.c complete.c parser.c exec.c caps.c env.c; do
+    for f in main.c editor.c history.c complete.c lexer.c run.c exec.c caps.c env.c; do
         srcs+=("$srcdir/$f")
     done
     "$CC_WRAPPER" -O2 -Wall -I"$srcdir" -o "$out" "${srcs[@]}"
