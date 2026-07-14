@@ -36,7 +36,12 @@ all: iso
 IWL_FW := $(wildcard vendor/iwlwifi-cc-a0-59.ucode)
 
 KERNEL_STRIPPED = $(BUILD)/aegis-stripped.elf
-$(KERNEL_STRIPPED):
+# Prerequisites so a locally-dropped vendor/aegis-<ver>.elf (or a KERNEL_VERSION
+# bump) actually triggers a refetch/recopy — without these, once
+# build/aegis-stripped.elf exists once, make considers it satisfied forever
+# and silently keeps using a stale kernel no matter what changes underneath it.
+VENDOR_KERNEL := vendor/aegis-$(KERNEL_VERSION).elf
+$(KERNEL_STRIPPED): KERNEL_VERSION $(wildcard $(VENDOR_KERNEL))
 	bash tools/fetch-kernel.sh $(KERNEL_VERSION) $@
 
 # ── User program builds ─��──────────────────────────────────���────────────────
