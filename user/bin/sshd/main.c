@@ -6,7 +6,8 @@
  * that front-end: listen on :22, accept, fork, hand the connected socket to
  * tinysshd as fd 0/1, and let tinysshd do the SSH handshake + session.
  *
- * Modelled on user/bin/httpd. Children auto-reap via SIG_IGN on SIGCHLD.
+ * Modelled on user/bin/httpd. Children are reaped by a real SIGCHLD
+ * handler (not SIG_IGN) so the concurrency-cap counter stays accurate.
  */
 #include <sys/socket.h>
 #include <netinet/in.h>

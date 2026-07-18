@@ -81,7 +81,9 @@ main(int argc, char **argv, char **envp)
         }
     }
 
-    /* Ignore SIGCHLD to prevent zombie accumulation */
+    /* Ignore SIGCHLD delivery (the kernel does NOT auto-reap on SIG_IGN —
+     * Aegis zombifies until an explicit waitpid; run_list()'s per-statement
+     * WNOHANG drain does the actual reaping). */
     {
         struct sigaction sa;
         memset(&sa, 0, sizeof(sa));
