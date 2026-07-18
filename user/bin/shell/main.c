@@ -316,7 +316,7 @@ main(int argc, char **argv)
         return 0;
     }
 
-    printf("[SHELL] Aegis shell ready\n");
+    printf("[SHELL] LoricaOS shell ready\n");
 
     /* Prevent SIGCHLD from terminating the shell.
      * signal_deliver already treats SIGCHLD SIG_DFL as ignore, but
