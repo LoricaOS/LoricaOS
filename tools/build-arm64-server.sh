@@ -163,8 +163,12 @@ done
 [ -f "$BLOBS/curl.bin" ] && cp "$BLOBS/curl.bin" "$STAGE/bin/curl"
 # 4d. coreutils → /bin.
 cp "$CU_OUT"/* "$STAGE/bin/" 2>/dev/null || true
-# 4e. home dir for the live user.
-mkdir -p "$STAGE/home/live"
+# 4e. home dir for the live user. live is uid 0 (cosmetic root); mke2fs -d
+#     preserves the *host* build uid, so force 0:0 — otherwise the live user
+#     can't write its own home (uid 0 does not bypass DAC in this kernel).
+#     Pre-create Pictures/ (the compositor saves screenshots under it).
+mkdir -p "$STAGE/home/live/Pictures/screenshots"
+chown -R 0:0 "$STAGE/home/live"
 chmod 0755 "$STAGE/bin/"* 2>/dev/null || true
 log "rootfs has $(ls "$STAGE/bin" | wc -l | tr -d ' ') binaries in /bin"
 

@@ -197,5 +197,12 @@ int install_make_home(const char *home, int uid, int gid)
         return -1;
     if (chown(home, uid, gid) != 0)
         return -1;
+    /* Standard user dir. The compositor drops screenshots in Pictures/screenshots
+     * (creating that subdir on demand); pre-create Pictures so it's there from the
+     * first login, owned by the user. */
+    char pics[128];
+    snprintf(pics, sizeof pics, "%s/Pictures", home);
+    if (mkdir(pics, 0755) == 0 || errno == EEXIST)
+        chown(pics, uid, gid);
     return 0;
 }
