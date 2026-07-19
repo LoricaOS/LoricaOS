@@ -139,6 +139,32 @@ mkdir -p "$(dirname "$OUT_EXT2")"; rm -f "$OUT_EXT2"
 # roomier default.
 ROOTFS_SIZE="${ROOTFS_SIZE:-128M}"
 /sbin/mke2fs -q -t ext2 -b 4096 -d "$STAGE" -L aegis-arm64 "$OUT_EXT2" "$ROOTFS_SIZE"
+# Drop the trailing free blocks. The fs is a single block group with 4 KiB
+# blocks, so it has no backup superblocks in the tail and everything past the
+# last used block is zero; the kernel's ramdisk_init reads the real block count
+# out of the superblock and zero-extends back to full size in RAM (see
+# kernel/drivers/ramdisk.c). The x86 ISO has always shipped truncated — this is
+# the same trick, and it matters far more here because the Pi 5 netboot sends
+# every one of these bytes over TFTP on each boot (62M -> ~24M).
+python3 - "$OUT_EXT2" <<'TRUNC'
+import os, sys
+p = sys.argv[1]
+size = os.path.getsize(p)
+with open(p, "rb") as f:
+    off, last, CH = size, 0, 1 << 20
+    while off > 0:
+        rd = min(CH, off); off -= rd
+        f.seek(off); blk = f.read(rd)
+        nz = len(blk.rstrip(b"\x00"))
+        if nz:
+            last = off + nz
+            break
+new = ((last + 4095) // 4096) * 4096
+if new < size:
+    os.truncate(p, new)
+    print("[arm64-desktop] truncated %d -> %d bytes (kernel re-extends at boot)"
+          % (size, new))
+TRUNC
 log "rootfs.ext2: $(stat -c%s "$OUT_EXT2") bytes"
 
 # 5. UEFI ISO, cmdline boot=graphical.
