@@ -29,7 +29,11 @@ bash "$REPO/tools/build-arm64-server.sh" >/dev/null
 #    stale 1.0.0, so build the toolkit locally and compile the components
 #    directly against it — bypassing each Makefile's fetch-glyph.sh).
 log "== glyph toolkit =="
-( cd "$GLYPH" && make MUSL_CC="$W" AR=aarch64-linux-gnu-ar >/dev/null 2>&1 )
+# `make clean` first: the tree may hold x86 objects from build-x86-hpkgs.sh
+# (which cleans for the same reason in reverse). Without it the archives keep
+# the other arch's objects and every component fails to link with
+# "skipping incompatible libglyph.a".
+( cd "$GLYPH" && make clean >/dev/null 2>&1; make MUSL_CC="$W" AR=aarch64-linux-gnu-ar >/dev/null 2>&1 )
 for app in lumen bastion citadel-dock lumen-shell; do
     rm -rf "/root/$app/toolkit"; mkdir -p "/root/$app/toolkit/lib" "/root/$app/toolkit/include"
     cp "$GLYPH"/libglyph.a "$GLYPH"/libcitadel.a "$GLYPH"/libaudio.a "$GLYPH"/libauth.a \
@@ -129,7 +133,12 @@ log "rootfs has $(ls "$STAGE/bin" | wc -l | tr -d ' ') binaries; GUI + assets ov
 # 4. ext2 image (bigger — GUI + assets) as a Limine module.
 log "== ext2 image =="
 mkdir -p "$(dirname "$OUT_EXT2")"; rm -f "$OUT_EXT2"
-/sbin/mke2fs -q -t ext2 -b 4096 -d "$STAGE" -L aegis-arm64 "$OUT_EXT2" 128M
+# Size is an override, not a constant: the Pi 5 TFTP netboot path carries this
+# image as an initramfs, and TFTP's 16-bit block counter puts a ceiling on it
+# (62M is what the netboot loop has been running). ISO builds can use the
+# roomier default.
+ROOTFS_SIZE="${ROOTFS_SIZE:-128M}"
+/sbin/mke2fs -q -t ext2 -b 4096 -d "$STAGE" -L aegis-arm64 "$OUT_EXT2" "$ROOTFS_SIZE"
 log "rootfs.ext2: $(stat -c%s "$OUT_EXT2") bytes"
 
 # 5. UEFI ISO, cmdline boot=graphical.
