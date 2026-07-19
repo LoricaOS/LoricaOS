@@ -43,7 +43,11 @@ all: iso
 IWL_FW := $(wildcard vendor/iwlwifi-cc-a0-59.ucode)
 
 KERNEL_STRIPPED = $(BUILD)/aegis-stripped.elf
-$(KERNEL_STRIPPED):
+# Depend on KERNEL_VERSION and (if present) the cache file itself: a
+# prerequisite-less rule silently reused a months-old kernel after the cache
+# was replaced by a locally built one. Absent cache → empty, so it downloads.
+KERNEL_CACHE := $(wildcard vendor/aegis-$(KERNEL_VERSION).elf)
+$(KERNEL_STRIPPED): KERNEL_VERSION $(KERNEL_CACHE)
 	bash tools/fetch-kernel.sh $(KERNEL_VERSION) $@
 
 # ── User program builds ─��──────────────────────────────────���────────────────
