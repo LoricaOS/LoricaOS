@@ -138,16 +138,28 @@ log "== rootfs staging =="
 rm -rf "$STAGE"; mkdir -p "$STAGE"/{bin,etc,home,dev,proc,tmp,run}
 # 4a. /etc skeleton from the repo (passwd/shadow/group, caps.d, vigil services).
 cp -a "$REPO/rootfs/etc/." "$STAGE/etc/"
+# /etc/motd and /etc/lorica-version ship a __LORICA_VERSION__ placeholder that
+# the x86 packer (build-rootfs.sh) substitutes at pack time. Do the same here —
+# without it lumen's About window read the literal placeholder off the arm64
+# rootfs and showed "Version __LORICA_VERSION__".
+LORICA_VERSION="${LORICA_VERSION:-$(cat "$REPO/VERSION" 2>/dev/null || echo untracked)}"
+for f in "$STAGE/etc/motd" "$STAGE/etc/lorica-version"; do
+    [ -f "$f" ] || continue
+    sed -i "s/__LORICA_VERSION__/$LORICA_VERSION/g" "$f"
+done
+log "version strings: $LORICA_VERSION"
 # Optional: override the herald repo URL at build time (e.g. a local test repo).
 [ -n "${HERALD_SOURCES:-}" ] && { mkdir -p "$STAGE/etc/herald"; echo "$HERALD_SOURCES" > "$STAGE/etc/herald/sources.list"; }
 cp -a "$REPO/rootfs/home/." "$STAGE/home/" 2>/dev/null || true
-# 4b. Prune dev/test vigil services — keep getty (→ login) + dhcp (→ networking,
-#     so the server gets an IP at boot; needed for herald remote fetch).
+# 4b. Prune dev/test vigil services — keep getty (→ login), dhcp (→ networking,
+#     so the server gets an IP at boot; needed for herald remote fetch) and
+#     chronos (→ NTP; without it the clock sits at 00:00 from boot, which is
+#     what the Pi 5 was showing).
 if [ -d "$STAGE/etc/vigil/services" ]; then
     for s in "$STAGE/etc/vigil/services"/*/; do
         case "$(basename "$s")" in
-            getty|dhcp) ;;                  # keep
-            *) rm -rf "$s" ;;               # drop dltest/smpstress/chronos/...
+            getty|dhcp|chronos) ;;          # keep
+            *) rm -rf "$s" ;;               # drop dltest/smpstress/stresssoak/...
         esac
     done
 fi
