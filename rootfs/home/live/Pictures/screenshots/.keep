@@ -1,0 +1,4 @@
+Tracked so the rootfs builder ships /home/live/Pictures/screenshots. The
+compositor (lumen) saves PrintScreen captures here; pre-creating it means the
+folder is present from the first login. New user accounts get ~/Pictures via
+useradd (install_make_home).

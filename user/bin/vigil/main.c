@@ -323,8 +323,12 @@ main(void)
 
     /* Set the OS hostname (the kernel default is the generic "aegis"). The OS
      * owns its own identity, so init sets it here — uname()/Settings/the shell
-     * prompt all then report "loricaos". */
-    sethostname("loricaos", 7);
+     * prompt all then report this. strlen, not a literal count: this call used
+     * to pass 7 for "loricaos" and every prompt read "loricao". */
+    {
+        static const char host[] = "lorica";
+        sethostname(host, strlen(host));
+    }
 
     /* Detect boot mode + quiet flag from kernel command line BEFORE any output */
     {

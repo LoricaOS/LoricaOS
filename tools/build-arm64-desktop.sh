@@ -29,8 +29,12 @@ bash "$REPO/tools/build-arm64-server.sh" >/dev/null
 #    stale 1.0.0, so build the toolkit locally and compile the components
 #    directly against it — bypassing each Makefile's fetch-glyph.sh).
 log "== glyph toolkit =="
-( cd "$GLYPH" && make MUSL_CC="$W" AR=aarch64-linux-gnu-ar >/dev/null 2>&1 )
-for app in lumen bastion citadel-dock; do
+# `make clean` first: the tree may hold x86 objects from build-x86-hpkgs.sh
+# (which cleans for the same reason in reverse). Without it the archives keep
+# the other arch's objects and every component fails to link with
+# "skipping incompatible libglyph.a".
+( cd "$GLYPH" && make clean >/dev/null 2>&1; make MUSL_CC="$W" AR=aarch64-linux-gnu-ar >/dev/null 2>&1 )
+for app in lumen bastion citadel-dock lumen-shell; do
     rm -rf "/root/$app/toolkit"; mkdir -p "/root/$app/toolkit/lib" "/root/$app/toolkit/include"
     cp "$GLYPH"/libglyph.a "$GLYPH"/libcitadel.a "$GLYPH"/libaudio.a "$GLYPH"/libauth.a \
        "/root/$app/toolkit/lib/"
@@ -38,11 +42,12 @@ for app in lumen bastion citadel-dock; do
        "$GLYPH"/lib/libauth/*.h "/root/$app/toolkit/include/"
 done
 GUILIBS="-Ltoolkit/lib -lcitadel -laudio -lauth -lglyph"
-log "== lumen / bastion / citadel-dock =="
+log "== lumen / bastion / citadel-dock / lumen-shell =="
 ( cd /root/lumen        && "$W" -O2 -Wall -Itoolkit/include -o lumen.elf   src/*.c $GUILIBS )
 ( cd /root/bastion      && "$W" -O2 -Wall -Itoolkit/include -o bastion.elf src/*.c $GUILIBS )
 ( cd /root/citadel-dock && "$W" -O2 -Wall -Itoolkit/include -o dock.elf \
       $(ls /root/citadel-dock/src/*.c 2>/dev/null || ls /root/citadel-dock/*.c) $GUILIBS )
+( cd /root/lumen-shell  && "$W" -O2 -Wall -Itoolkit/include -o shell.elf   src/*.c $GUILIBS )
 
 # 2b. Build every app (same toolkit). /apps apps → /apps/<id>/<id> + app.ini +
 #     icon; the applications menu is a /bin binary. Each app repo lives at
@@ -52,37 +57,52 @@ stage_toolkit() {   # <repo-dir>
     cp "$GLYPH"/libglyph.a "$GLYPH"/libcitadel.a "$GLYPH"/libaudio.a "$GLYPH"/libauth.a "$1/toolkit/lib/"
     cp "$GLYPH"/lib/glyph/*.h "$GLYPH"/lib/citadel/*.h "$GLYPH"/lib/audio/*.h "$GLYPH"/lib/libauth/*.h "$1/toolkit/include/"
 }
-APP_REPOS="lumen-terminal lumen-calculator lumen-editor lumen-filemanager \
-    lumen-settings lumen-sysmon lumen-netman lumen-calendar lumen-imageviewer \
-    lumen-tunes lumen-run lumen-feeds lumen-2048 lumen-snake lumen-minesweeper"
-app_ok=0
-for app in $APP_REPOS; do
-    R="/root/$app"; [ -d "$R" ] || { log "SKIP $app (not mirrored)"; continue; }
+# Every non-core component, installed EXACTLY as herald installs it on x86: the
+# built binary at the path its own pack.sh declares (DESTBIN) + the pkg/ tree
+# overlaid verbatim (app.ini, icon, caps.d, vigil services). GUI apps land at
+# apps/<id>/<id>; lumen-dbg is a bin/ probe service, the menu is bin/applications
+# — driving off each pack.sh keeps all three shapes correct without special-
+# casing. This set MUST equal tools/components.list minus the four core
+# components above; games/extras (2048/snake/minesweeper/feeds) are herald-only
+# on x86, so they are NOT baked here. Kept 1:1 by CI (tools/check-desktop-parity.sh,
+# which parses COMPONENTS below).
+COMPONENTS="lumen-settings lumen-terminal lumen-calculator lumen-editor \
+    lumen-filemanager lumen-run lumen-tunes lumen-calendar lumen-imageviewer \
+    lumen-sysmon lumen-netman lumen-video lumen-dbg lumen-applications-menu"
+comp_ok=0
+for c in $COMPONENTS; do
+    R="/root/$c"; [ -d "$R" ] || { log "SKIP $c (not mirrored)"; continue; }
     stage_toolkit "$R"
-    if ! ( cd "$R" && "$W" -O2 -Wall -Itoolkit/include -o component.elf src/*.c $GUILIBS ) 2>"/tmp/app-$app.err"; then
-        log "SKIP $app (build failed; /tmp/app-$app.err)"; continue
+    inc=""; libs="$GUILIBS"
+    # lumen-video also links a trimmed static FFmpeg. Build it once for arm64
+    # (cross), reusing the loricaos ffmpeg source tree so there's no network fetch.
+    if [ "$c" = lumen-video ]; then
+        FFI="$R/build/ffmpeg-install-arm64"
+        if [ ! -f "$FFI/lib/libavcodec.a" ]; then
+            log "building arm64 FFmpeg for lumen-video (slow, one-time)..."
+            [ -f "$R/references/ffmpeg/configure" ] || { mkdir -p "$R/references"; ln -sfn "$REPO/references/ffmpeg" "$R/references/ffmpeg"; }
+            if ! ( cd "$R" && CC="$W" ARCH=aarch64 SUFFIX=-arm64 REPO="$R" CROSS_PREFIX=aarch64-linux-gnu- \
+                   bash tools/build-ffmpeg.sh ) >"/tmp/app-$c-ffmpeg.log" 2>&1; then
+                log "SKIP $c (FFmpeg build failed; /tmp/app-$c-ffmpeg.log)"; continue
+            fi
+        fi
+        inc="-I$FFI/include"
+        # No -lpthread/-lm: musl folds both into libc; adding them here pulls in
+        # the glibc aarch64 libm.a and segfaults the cross linker.
+        libs="-L$FFI/lib -lavformat -lavcodec -lswscale -lswresample -lavutil $GUILIBS"
     fi
-    appdir=$(ls -d "$R"/pkg/apps/*/ 2>/dev/null | head -1); id=$(basename "$appdir")
-    mkdir -p "$STAGE/apps/$id"
-    cp "$R/component.elf" "$STAGE/apps/$id/$id"; "$STRIP" -s "$STAGE/apps/$id/$id"; chmod 0755 "$STAGE/apps/$id/$id"
-    cp "$appdir/app.ini"  "$STAGE/apps/$id/" 2>/dev/null || true
-    cp "$appdir/icon.png" "$STAGE/apps/$id/" 2>/dev/null || true
-    cp "$R/pkg/etc/aegis/caps.d/$id" "$STAGE/etc/aegis/caps.d/" 2>/dev/null || true
-    app_ok=$((app_ok+1))
+    if ! ( cd "$R" && "$W" -O2 -Wall -Itoolkit/include $inc -o component.elf src/*.c $libs ) 2>"/tmp/app-$c.err"; then
+        log "SKIP $c (build failed; /tmp/app-$c.err)"; continue
+    fi
+    dest=$(grep -m1 '^DESTBIN=' "$R/tools/pack.sh" | sed 's/^DESTBIN=//; s/[[:space:]#].*//')
+    [ -n "$dest" ] || { log "SKIP $c (no DESTBIN in pack.sh)"; continue; }
+    mkdir -p "$STAGE/$(dirname "$dest")"
+    "$STRIP" -o "$STAGE/$dest" "$R/component.elf" 2>/dev/null || cp "$R/component.elf" "$STAGE/$dest"
+    chmod 0755 "$STAGE/$dest"
+    [ -d "$R/pkg" ] && cp -R "$R/pkg/." "$STAGE/"   # app.ini / icon / caps.d / vigil, verbatim
+    comp_ok=$((comp_ok+1))
 done
-# applications menu → /bin/applications
-if [ -d /root/lumen-applications-menu ]; then
-    stage_toolkit /root/lumen-applications-menu
-    if ( cd /root/lumen-applications-menu && "$W" -O2 -Wall -Itoolkit/include -o component.elf src/*.c $GUILIBS ) 2>/tmp/app-applications.err; then
-        cp /root/lumen-applications-menu/component.elf "$STAGE/bin/applications"
-        "$STRIP" -s "$STAGE/bin/applications"; chmod 0755 "$STAGE/bin/applications"
-        cp /root/lumen-applications-menu/pkg/etc/aegis/caps.d/applications "$STAGE/etc/aegis/caps.d/" 2>/dev/null || true
-        app_ok=$((app_ok+1))
-    else
-        log "SKIP applications-menu (build failed)"
-    fi
-fi
-log "apps built + installed: $app_ok"
+log "components built + installed: $comp_ok"
 
 # 3. Overlay the desktop onto the server staging.
 log "== overlay desktop =="
@@ -90,6 +110,7 @@ install_bin(){ cp "$1" "$STAGE/bin/$2"; "$STRIP" -s "$STAGE/bin/$2"; chmod 0755 
 install_bin /root/lumen/lumen.elf          lumen
 install_bin /root/bastion/bastion.elf      bastion
 install_bin /root/citadel-dock/dock.elf    citadel-dock
+install_bin /root/lumen-shell/shell.elf    lumen-shell
 # assets → /usr/share (wallpaper/logo/claude) + /usr/share/fonts (ttf)
 mkdir -p "$STAGE/usr/share/fonts"
 cp /root/lumen/assets/*.ttf                 "$STAGE/usr/share/fonts/" 2>/dev/null || true
@@ -99,9 +120,10 @@ cp /root/lumen/assets/wallpaper.* /root/lumen/assets/logo.raw \
 cp /root/lumen/pkg/caps.d/lumen                          "$STAGE/etc/aegis/caps.d/" 2>/dev/null || true
 cp /root/bastion/pkg/etc/aegis/caps.d/bastion            "$STAGE/etc/aegis/caps.d/" 2>/dev/null || true
 cp /root/citadel-dock/pkg/etc/aegis/caps.d/citadel-dock  "$STAGE/etc/aegis/caps.d/" 2>/dev/null || true
-# services: bastion greeter (graphical) + dock. vigil in graphical mode runs
-# the bastion service instead of getty.
-for svc in bastion citadel-dock; do
+cp /root/lumen-shell/pkg/etc/aegis/caps.d/lumen-shell    "$STAGE/etc/aegis/caps.d/" 2>/dev/null || true
+# services: bastion greeter (graphical) + dock + top-bar shell. vigil in
+# graphical mode runs the bastion service instead of getty.
+for svc in bastion citadel-dock lumen-shell; do
     src=$(ls -d /root/$svc/pkg/etc/vigil/services/* 2>/dev/null | head -1)
     [ -n "$src" ] && { mkdir -p "$STAGE/etc/vigil/services/$(basename "$src")"; \
         cp "$src"/* "$STAGE/etc/vigil/services/$(basename "$src")/"; }
@@ -111,7 +133,38 @@ log "rootfs has $(ls "$STAGE/bin" | wc -l | tr -d ' ') binaries; GUI + assets ov
 # 4. ext2 image (bigger — GUI + assets) as a Limine module.
 log "== ext2 image =="
 mkdir -p "$(dirname "$OUT_EXT2")"; rm -f "$OUT_EXT2"
-/sbin/mke2fs -q -t ext2 -b 4096 -d "$STAGE" -L aegis-arm64 "$OUT_EXT2" 128M
+# Size is an override, not a constant: the Pi 5 TFTP netboot path carries this
+# image as an initramfs, and TFTP's 16-bit block counter puts a ceiling on it
+# (62M is what the netboot loop has been running). ISO builds can use the
+# roomier default.
+ROOTFS_SIZE="${ROOTFS_SIZE:-128M}"
+/sbin/mke2fs -q -t ext2 -b 4096 -d "$STAGE" -L aegis-arm64 "$OUT_EXT2" "$ROOTFS_SIZE"
+# Drop the trailing free blocks. The fs is a single block group with 4 KiB
+# blocks, so it has no backup superblocks in the tail and everything past the
+# last used block is zero; the kernel's ramdisk_init reads the real block count
+# out of the superblock and zero-extends back to full size in RAM (see
+# kernel/drivers/ramdisk.c). The x86 ISO has always shipped truncated — this is
+# the same trick, and it matters far more here because the Pi 5 netboot sends
+# every one of these bytes over TFTP on each boot (62M -> ~24M).
+python3 - "$OUT_EXT2" <<'TRUNC'
+import os, sys
+p = sys.argv[1]
+size = os.path.getsize(p)
+with open(p, "rb") as f:
+    off, last, CH = size, 0, 1 << 20
+    while off > 0:
+        rd = min(CH, off); off -= rd
+        f.seek(off); blk = f.read(rd)
+        nz = len(blk.rstrip(b"\x00"))
+        if nz:
+            last = off + nz
+            break
+new = ((last + 4095) // 4096) * 4096
+if new < size:
+    os.truncate(p, new)
+    print("[arm64-desktop] truncated %d -> %d bytes (kernel re-extends at boot)"
+          % (size, new))
+TRUNC
 log "rootfs.ext2: $(stat -c%s "$OUT_EXT2") bytes"
 
 # 5. UEFI ISO, cmdline boot=graphical.
