@@ -119,12 +119,23 @@ int main(void)
     /* Force the greeter from now on: drop any live passwordless autologin. */
     unlink(AUTOLOGIN_FILE);
 
-    /* Mark configured LAST — this flips the kernel's first-boot exception off on
-     * every subsequent boot, so this program can never write /etc/aegis again. */
+    /* Mark configured — this flips the kernel's first-boot exception off on every
+     * subsequent boot, so this program can never write /etc/aegis again. Write it
+     * before the self-cleanup so idempotency holds even if a delete below fails. */
     {
         int fd = open(CONFIGURED_MARK, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd >= 0) { write(fd, "1\n", 2); close(fd); }
     }
+
+    /* Self-cleanup (mirrors vigil's installer removal): delete our own caps grant
+     * and our binary so nothing carrying the first-boot exception's AUTH+INSTALL
+     * lingers on a configured system. We still hold INSTALL this boot (caps were
+     * applied at exec), so the /etc/aegis/caps.d write is permitted; a running
+     * program may unlink its own executable (the inode survives until exit).
+     * Best-effort — the marker above already closed the exception and blocks a
+     * re-run, so a failure here is harmless. */
+    unlink("/etc/aegis/caps.d/configure");   /* our capability grant */
+    unlink("/bin/configure");                /* our binary */
     sync();
 
     printf("\n✓ Account '%s' created and LoricaOS configured.\n", user);
