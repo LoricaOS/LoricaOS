@@ -36,7 +36,15 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential musl musl-tools nasm \
-            xorriso e2fsprogs mtools git curl
+            xorriso e2fsprogs mtools git curl wget pkg-config
+      - name: Build musl + FFmpeg static libs
+        # A base user binary (ffsmoke) and lumen-video link the trimmed FFmpeg
+        # decode libs, built with the in-tree musl-gcc. Do it before the ISO
+        # build so the user-progs step finds build/ffmpeg-install/. (On a warm
+        # dev box these are cached; a fresh CI runner must build them.)
+        run: |
+          bash tools/build-musl.sh
+          CC="$PWD/build/musl-dynamic/usr/bin/musl-gcc" bash tools/build-ffmpeg.sh
       - name: Build desktop + server ISOs
         # `make` fetches the kernel (tools/fetch-kernel.sh), components
         # (tools/fetch-components.sh) and Limine (tools/fetch-limine.sh).
