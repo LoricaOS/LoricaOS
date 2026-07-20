@@ -314,6 +314,30 @@ remove_installers_if_installed(int is_live)
     vigil_log("installed system: installers + live autologin removed");
 }
 
+/* First-boot account setup (Raspberry Pi). The Pi image is flashed to disk with
+ * no account, so on the first boot — before any login — run "Configure LoricaOS"
+ * on the console so the owner sets their username + password. Shipped only in
+ * the Pi image (/bin/configure is absent on x86), and it writes
+ * /etc/aegis/configured, so this runs exactly once. The configurator holds the
+ * kernel's first-boot exception (caps.d: firstboot AUTH INSTALL) to write the
+ * account + the /etc/aegis tree; it forces the greeter and marks the system
+ * configured itself. Called BEFORE the SIGCHLD reaper is installed so the
+ * blocking wait here is unambiguous. */
+static void
+run_first_boot_setup(void)
+{
+    if (access("/etc/aegis/configured", F_OK) == 0) return;   /* already configured */
+    if (access("/bin/configure", X_OK) != 0) return;          /* not shipped (x86) */
+    vigil_log("first boot: Configure LoricaOS");
+    pid_t pid = fork();
+    if (pid == 0) {
+        char *argv[] = { (char *)"/bin/configure", NULL };
+        execv(argv[0], argv);
+        _exit(127);
+    }
+    if (pid > 0) { int st; waitpid(pid, &st, 0); }
+}
+
 int
 main(void)
 {
@@ -370,6 +394,10 @@ main(void)
         int fd = open(VIGIL_PID_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd >= 0) { write(fd, pidbuf, (size_t)n); close(fd); }
     }
+
+    /* First boot on the Pi: set up the account before login (and before the
+     * SIGCHLD reaper, so the blocking wait inside is clean). */
+    run_first_boot_setup();
 
     signal(SIGUSR1, handle_usr1);
     signal(SIGTERM, handle_term);

@@ -7,19 +7,19 @@
  * — the same credential writer the x86 installer uses — minus every disk op.
  *
  * The primary account is uid 0 (LoricaOS has no "root": uid 0 is the first user
- * and carries no kernel power — authority is capabilities). This writes the
- * account files it can with CAP_KIND_AUTH alone — /etc/passwd, /etc/shadow,
- * /etc/group + the home dir — reusing libinstall's proven crypto/validation.
+ * and carries no kernel power — authority is capabilities). install_write_
+ * credentials writes /etc/passwd + /etc/shadow + /etc/group + the /etc/aegis/
+ * admin elevation credential + the home dir in one call; the admin credential
+ * defaults to the user's own password (sudo-style: re-type your own password to
+ * elevate), changeable later with adminpw. For *additional* accounts the system
+ * ships useradd/passwd/etc.
  *
- * Division of labour with vigil (PID 1): the configurator does the AUTH-gated
- * account write; vigil owns the /etc/aegis side (it already strips the live
- * autologin on first boot and holds the tree authority) — removing autologin to
- * force the greeter, writing the /etc/aegis/configured marker, and (open design
- * item) seeding the /etc/aegis/admin elevation credential, which needs
- * CAP_KIND_INSTALL+AUTH in an admin session that does not exist on first boot.
- * For *additional* accounts later the system ships useradd/passwd/etc.
- *
- * Runs with CAP_KIND_AUTH via caps.d (that is all the /etc/shadow write needs).
+ * Authority: runs with CAP_KIND_AUTH + CAP_KIND_INSTALL via the FIRST-BOOT
+ * EXCEPTION — caps.d/configure declares the `firstboot` tier, which the kernel
+ * grants only while /etc/aegis/configured is absent (g_first_boot). That is what
+ * lets it write the /etc/aegis tree on a machine with no account and thus no
+ * admin session to elevate. Writing /etc/aegis/configured at the end flips the
+ * exception off on every later boot — a one-shot grant.
  */
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -33,20 +33,7 @@
 #include "libinstall.h"
 
 #define CONFIGURED_MARK "/etc/aegis/configured"
-
-/* Write one whole file (create/truncate) then chmod (the VFS hardcodes 0644 on
- * O_CREAT). Returns 0 on success. */
-static int write_file(const char *path, const char *data, int len, int mode)
-{
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0) return -1;
-    int off = 0;
-    while (off < len) { int w = (int)write(fd, data + off, (size_t)(len - off));
-                        if (w <= 0) { close(fd); return -1; } off += w; }
-    close(fd);
-    chmod(path, mode);
-    return 0;
-}
+#define AUTOLOGIN_FILE  "/etc/aegis/autologin"
 
 /* read a password with asterisk echo (termios raw), like the installer. */
 static int read_password(const char *prompt, char *buf, int bufsize)
@@ -119,30 +106,29 @@ int main(void)
         return 1;
     }
 
-    /* Write the account files (uid 0 primary user). /etc/shadow is CAP_KIND_AUTH
-     * gated; /etc/passwd and /etc/group are ordinary. The /etc/aegis tree is
-     * left to vigil (this holds no INSTALL cap). */
-    char line[512]; int n;
-    n = snprintf(line, sizeof line, "%s:x:0:0:%s:/home/%s:/bin/stsh\n", user, user, user);
-    if (write_file("/etc/passwd", line, n, 0644) != 0) {
-        fprintf(stderr, "\nError: could not write /etc/passwd. Aborting.\n"); return 1; }
-    n = snprintf(line, sizeof line, "%s:%s:19814:0:99999:7:::\n", user, hash);
-    if (write_file("/etc/shadow", line, n, 0600) != 0) {
-        fprintf(stderr, "\nError: could not write /etc/shadow (need CAP_KIND_AUTH). Aborting.\n");
-        return 1; }
-    n = snprintf(line, sizeof line, "%s:x:0:%s\nwheel:x:999:%s\n", user, user, user);
-    if (write_file("/etc/group", line, n, 0644) != 0) {
-        fprintf(stderr, "\nError: could not write /etc/group. Aborting.\n"); return 1; }
+    /* Write the account + the /etc/aegis/admin elevation credential (defaults to
+     * the user's own hash — pass NULL) + the home dir, in one call. Needs
+     * CAP_KIND_AUTH + CAP_KIND_INSTALL, held here via the first-boot exception. */
+    if (install_write_credentials(user, hash, NULL) != 0) {
+        fprintf(stderr, "\nError: could not write the account files. If the "
+                        "system is already configured the first-boot exception "
+                        "is gone — nothing was written.\n");
+        return 1;
+    }
 
-    /* Home directory for the new user (owned by uid 0). */
+    /* Force the greeter from now on: drop any live passwordless autologin. */
+    unlink(AUTOLOGIN_FILE);
+
+    /* Mark configured LAST — this flips the kernel's first-boot exception off on
+     * every subsequent boot, so this program can never write /etc/aegis again. */
     {
-        char home[80];
-        snprintf(home, sizeof home, "/home/%s", user);
-        install_make_home(home, 0, 0);
+        int fd = open(CONFIGURED_MARK, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd >= 0) { write(fd, "1\n", 2); close(fd); }
     }
     sync();
 
-    printf("\n✓ Account '%s' created.\n", user);
-    printf("  You'll be asked to log in with this password from now on.\n\n");
+    printf("\n✓ Account '%s' created and LoricaOS configured.\n", user);
+    printf("  You'll log in with this password from now on"
+           " (re-type it to elevate to admin).\n\n");
     return 0;
 }
