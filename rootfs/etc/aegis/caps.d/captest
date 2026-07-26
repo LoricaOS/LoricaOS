@@ -1,6 +1,23 @@
-# captest security-regression probe — declares an ADMIN-tier DISK_ADMIN that
-# must be WITHHELD without an admin_session (security review 05 finding 1).
-# DO NOT add other caps: the baseline-deny suite relies on captest holding
-# nothing else. (Keep this file < 512 bytes: the loader reads only the first
-# block, so the directive below must stay near the top.)
 admin DISK_ADMIN
+admin AUTH
+admin POWER
+# ^^ DIRECTIVES MUST STAY AT THE TOP: the loader reads only the first 512 bytes
+# of this file (cap_policy.c: char buf[512], silently truncated) — a directive
+# pushed past that is dropped with no warning, which would make captest's
+# deny-suite pass VACUOUSLY (nothing declared = nothing to withhold).
+#
+# These are the ADMIN-tier caps the admin_session gate must WITHHOLD:
+# DISK_ADMIN (security review 05 finding 1), AUTH + POWER (2026-07-24 audit
+# follow-up — both were granted on mere `authenticated`, so any logged-in user's
+# useradd/usermod could rewrite another user's credentials).
+# Only add caps here at ADMIN tier; a SERVICE-tier line is granted
+# unconditionally and would break the suite.
+#
+# What the vigil-launched selftest run actually proves: that run is NOT an
+# authenticated session (vigil -> /bin/selftest -> captest never touches login,
+# so authenticated=0), so admin-tier caps are refused by the `authenticated`
+# condition BEFORE the admin_session gate is consulted. To exercise the GATE,
+# run captest from a real login session:
+#   plain logged-in shell -> `captest`  (authenticated=1, admin_session=0:
+#                                        admin-tier caps must STILL be denied)
+#   after stsh `admin`    -> `captest disk` / `captest auth`  (must be granted)

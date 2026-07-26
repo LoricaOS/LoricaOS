@@ -52,7 +52,7 @@ struct linux_dirent64 {
 /* Milliseconds since the monotonic clock started (~kernel boot), so vigil's
  * timeline chains directly onto the kernel's [BOOT] number. */
 static unsigned long
-uboot_ms(void)
+prof_ms(void)
 {
     struct timespec ts;
     if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
@@ -65,19 +65,19 @@ vigil_log(const char *msg)
 {
     if (s_quiet) return;
     char ts[24];
-    int n = snprintf(ts, sizeof(ts), "[%lu ms] vigil: ", uboot_ms());
+    int n = snprintf(ts, sizeof(ts), "[%lu ms] vigil: ", prof_ms());
     write(1, ts, (size_t)n);
     write(1, msg, strlen(msg));
     write(1, "\n", 1);
 }
 
-/* uboot_mark — a boot-profiling milestone that prints even under `quiet`, so a
- * production graphical boot can still be timed. Tagged [UBOOT] for grepping. */
+/* prof_mark — a boot-profiling milestone that prints even under `quiet`, so a
+ * production graphical boot can still be timed. Tagged [PROF] for grepping. */
 static void
-uboot_mark(const char *phase)
+prof_mark(const char *phase)
 {
     char b[96];
-    int n = snprintf(b, sizeof(b), "[UBOOT] %lu ms %s\n", uboot_ms(), phase);
+    int n = snprintf(b, sizeof(b), "[PROF] %lu ms %s\n", prof_ms(), phase);
     write(1, b, (size_t)n);
 }
 
@@ -336,6 +336,16 @@ run_first_boot_setup(void)
         _exit(127);
     }
     if (pid > 0) { int st; waitpid(pid, &st, 0); }
+
+    /* Remove the setup binary now that configure has exited (it must NOT delete
+     * its own running executable — that deadlocks process teardown). Gate on the
+     * configured marker so a failed/aborted run leaves configure in place to
+     * retry. caps.d/configure is already gone (configure removed it), so even if
+     * the binary lingered it would carry no first-boot authority. */
+    if (access("/etc/aegis/configured", F_OK) == 0) {
+        unlink("/bin/configure");
+        sync();
+    }
 }
 
 int
@@ -343,7 +353,7 @@ main(void)
 {
     int is_live = 0;
 
-    uboot_mark("vigil-enter");   /* PID 1 reached user space */
+    prof_mark("vigil-enter");   /* PID 1 reached user space */
 
     /* Set the OS hostname (the kernel default is the generic "aegis"). The OS
      * owns its own identity, so init sets it here — uname()/Settings/the shell
@@ -439,7 +449,7 @@ main(void)
         start_service(&s_svcs[i]);
     }
 
-    uboot_mark("services-spawned");   /* all boot-mode services fork+exec'd */
+    prof_mark("services-spawned");   /* all boot-mode services fork+exec'd */
 
     while (!s_got_term) {
         if (s_got_usr1) {

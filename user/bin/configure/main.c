@@ -74,9 +74,9 @@ int main(void)
     }
 
     printf("\n");
-    printf("  ┌─────────────────────────────────────────┐\n");
-    printf("  │           Configure LoricaOS            │\n");
-    printf("  └─────────────────────────────────────────┘\n\n");
+    printf("  +-----------------------------------------+\n");
+    printf("  |           Configure LoricaOS            |\n");
+    printf("  +-----------------------------------------+\n\n");
     printf("Welcome. Let's create your account.\n");
     printf("(You are the primary user — uid 0. LoricaOS has no separate root;\n");
     printf(" authority comes from capabilities, not from being uid 0.)\n\n");
@@ -102,7 +102,7 @@ int main(void)
     char hash[256];
     if (install_hash_password(pw, hash, sizeof hash) != 0) {
         fprintf(stderr, "\nError: could not hash the password (no secure salt "
-                        "from /dev/urandom). Aborting — nothing was written.\n");
+                        "from /dev/urandom). Aborting - nothing was written.\n");
         return 1;
     }
 
@@ -112,7 +112,7 @@ int main(void)
     if (install_write_credentials(user, hash, NULL) != 0) {
         fprintf(stderr, "\nError: could not write the account files. If the "
                         "system is already configured the first-boot exception "
-                        "is gone — nothing was written.\n");
+                        "is gone - nothing was written.\n");
         return 1;
     }
 
@@ -127,18 +127,21 @@ int main(void)
         if (fd >= 0) { write(fd, "1\n", 2); close(fd); }
     }
 
-    /* Self-cleanup (mirrors vigil's installer removal): delete our own caps grant
-     * and our binary so nothing carrying the first-boot exception's AUTH+INSTALL
-     * lingers on a configured system. We still hold INSTALL this boot (caps were
-     * applied at exec), so the /etc/aegis/caps.d write is permitted; a running
-     * program may unlink its own executable (the inode survives until exit).
-     * Best-effort — the marker above already closed the exception and blocks a
-     * re-run, so a failure here is harmless. */
+    /* Self-cleanup: delete our own caps grant so nothing carrying the first-boot
+     * exception's AUTH+INSTALL lingers on a configured system. We still hold
+     * INSTALL this boot (caps were applied at exec), so the /etc/aegis/caps.d
+     * write is permitted. Best-effort — the marker above already closed the
+     * exception and blocks a re-run, so a failure here is harmless.
+     *
+     * NOTE: we deliberately do NOT unlink our OWN binary (/bin/configure) here.
+     * Deleting the running executable and then exiting deadlocked process
+     * teardown (the exec mapping is backed by an inode whose link count just
+     * hit zero). vigil removes /bin/configure after we exit — when it is no
+     * longer mapped — gated on the configured marker (see run_first_boot_setup). */
     unlink("/etc/aegis/caps.d/configure");   /* our capability grant */
-    unlink("/bin/configure");                /* our binary */
     sync();
 
-    printf("\n✓ Account '%s' created and LoricaOS configured.\n", user);
+    printf("\nOK: Account '%s' created and LoricaOS configured.\n", user);
     printf("  You'll log in with this password from now on"
            " (re-type it to elevate to admin).\n\n");
     return 0;

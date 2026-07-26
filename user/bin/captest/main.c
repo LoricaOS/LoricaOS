@@ -18,22 +18,38 @@
  *   [CAPTEST] FAIL (p/n)           — at least one op was allowed (a bypass!)
  * plus one "[CAPTEST] <name>: PASS|FAIL" line per check for diagnosis.
  *
- * NOTE (DISK_ADMIN gate, security review 05): captest now ships a policy file
- * (caps.d/captest = `admin DISK_ADMIN`). That ADMIN-tier cap is gated behind an
- * admin_session, so the no-arg baseline run (a plain authenticated session) must
- * STILL be denied blkdev-list — proving the gate withholds DISK_ADMIN from mere
- * login. The companion mode `captest disk` runs the SINGLE positive check: after
- * the shell has been `admin`-elevated, DISK_ADMIN must now be granted, so
- * blkdev-list must SUCCEED — proving the gate is a real elevation check, not a
- * blanket deny. It prints:
- *   [CAPTEST] disk-elevated: PASS|FAIL
- *   [CAPTEST] DISK PASS|FAIL
+ * NOTE (admin_session gates): captest ships a policy file declaring the
+ * ADMIN-tier caps those gates must withhold — `admin DISK_ADMIN` (security
+ * review 05 finding 1) plus `admin AUTH` and `admin POWER` (2026-07-24 audit
+ * follow-up: both were granted on mere `authenticated`, so every logged-in
+ * user's useradd/usermod/userdel held the authority to rewrite another user's
+ * credentials). The no-arg run asserts all three are refused; the positive
+ * modes assert they are granted once elevated:
+ *   captest disk   -> [CAPTEST] disk-elevated: PASS|FAIL  /  [CAPTEST] DISK PASS|FAIL
+ *   captest auth   -> [CAPTEST] auth-elevated: PASS|FAIL
+ *                     [CAPTEST] power-elevated: PASS|FAIL /  [CAPTEST] AUTH PASS|FAIL
+ *
+ * WHAT THE BOOT-TIME RUN ACTUALLY PROVES (read before trusting it): vigil
+ * launches /bin/selftest -> captest as a oneshot service. That chain never goes
+ * through login, so the process is NOT authenticated (authenticated=0). Every
+ * ADMIN-tier cap is therefore refused by the `authenticated` condition BEFORE
+ * the admin_session gate is ever consulted — the boot-time pass proves the tier
+ * is withheld from an UNAUTHENTICATED session, which is weaker than it looks.
+ * (The previous comment here claimed this run was "a plain authenticated
+ * session". It is not, and the DISK_ADMIN regression test has been passing for
+ * that weaker reason since it was written.)
+ *
+ * To exercise the GATE itself you need authenticated=1, admin_session=0 — i.e.
+ * a real login session. Run `captest` from a plain logged-in shell (all three
+ * must still be denied), then `captest disk` / `captest auth` after stsh's
+ * `admin` builtin (all must now be granted).
  *
  * Each check PASSES when the operation is DENIED (syscall returns < 0). The
  * errno value is not asserted (ENOCAP is aliased to EPERM, and protected-tree
  * writes may surface as EPERM/EACCES/EROFS) — denial is the security property.
  */
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -93,6 +109,47 @@ main(int argc, char **argv)
         return 1;
     }
 
+    /* Positive mode: `captest auth` — the AUTH/POWER counterpart to `disk`.
+     * Both are declared ADMIN-tier in caps.d/captest and, since the 2026-07-24
+     * audit follow-up, both are admin_session-gated rather than granted on mere
+     * `authenticated`. Invoke from an admin-elevated shell: they must now be
+     * GRANTED, proving the gate is a real elevation check and not a blanket
+     * deny (the negative half lives in the baseline run below). */
+    if (argc > 1 && argv[1][0] == 'a') {
+        int ok = 1;
+
+        /* AUTH: /etc/shadow is inode-gated on CAP_KIND_AUTH in vfs_open.
+         * Read-only — this never mutates the credential file. */
+        int fd = open("/etc/shadow", O_RDONLY);
+        if (fd >= 0) {
+            printf("[CAPTEST] auth-elevated: PASS (allowed)\n");
+            close(fd);
+        } else {
+            printf("[CAPTEST] auth-elevated: FAIL (DENIED) — admin elevation "
+                   "did not grant AUTH\n");
+            ok = 0;
+        }
+
+        /* POWER: sethostname, not reboot — a POWER regression here must not
+         * power-cycle the test VM (same reasoning as the baseline suite).
+         * Restore the original name afterwards so the probe leaves no trace. */
+        char oldhn[128];
+        if (gethostname(oldhn, sizeof oldhn) != 0)
+            oldhn[0] = '\0';
+        if (sethostname("captest-probe", 13) == 0) {
+            printf("[CAPTEST] power-elevated: PASS (allowed)\n");
+        } else {
+            printf("[CAPTEST] power-elevated: FAIL (DENIED) — admin elevation "
+                   "did not grant POWER\n");
+            ok = 0;
+        }
+        if (oldhn[0])
+            sethostname(oldhn, strlen(oldhn));
+
+        printf("[CAPTEST] AUTH %s\n", ok ? "PASS" : "FAIL");
+        return ok ? 0 : 1;
+    }
+
     printf("[CAPTEST] start (baseline-caps probe)\n");
 
     /* setuid to a foreign identity: no SETUID cap and no authenticated
@@ -103,7 +160,10 @@ main(int argc, char **argv)
      * the deny above is the binding rule, not a blanket refusal. */
     expect_allowed("setuid-noop", setuid(getuid()));
 
-    /* POWER: sethostname needs CAP_KIND_POWER. Baseline lacks it. */
+    /* POWER: sethostname needs CAP_KIND_POWER. captest DECLARES `admin POWER`,
+     * which since the 2026-07-24 audit follow-up is admin_session-gated — so
+     * this run (not elevated) must still be refused. See the header note on
+     * what this proves under vigil vs. under a login shell. */
     expect_denied("sethostname-power",
                   sethostname("captest-probe", 13));
 
@@ -112,7 +172,10 @@ main(int argc, char **argv)
     expect_denied("socket-inet",
                   socket(AF_INET, SOCK_STREAM, 0));
 
-    /* AUTH: /etc/shadow is gated on CAP_KIND_AUTH at the resolved inode. */
+    /* AUTH: /etc/shadow is gated on CAP_KIND_AUTH at the resolved inode.
+     * captest DECLARES `admin AUTH`, admin_session-gated as of the 2026-07-24
+     * follow-up, so an unelevated run must still be refused. This is the check
+     * that would have caught useradd/usermod holding AUTH on mere login. */
     expect_denied("open-shadow",
                   open("/etc/shadow", O_RDONLY));
 

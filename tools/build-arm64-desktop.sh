@@ -132,6 +132,11 @@ log "rootfs has $(ls "$STAGE/bin" | wc -l | tr -d ' ') binaries; GUI + assets ov
 
 # 4. ext2 image (bigger — GUI + assets) as a Limine module.
 log "== ext2 image =="
+# Own the whole tree as uid 0 (see build-arm64-server.sh): the GUI overlay above
+# copied component pkg/ files that were tar-synced from the Mac (uid 501), so
+# re-assert uid 0 on the final staging before packing — else /etc ships 501-owned
+# and DAC-blocks the uid-0 primary user (mke2fs -d preserves the host uid).
+chown -R 0:0 "$STAGE"
 mkdir -p "$(dirname "$OUT_EXT2")"; rm -f "$OUT_EXT2"
 # Size is an override, not a constant: the Pi 5 TFTP netboot path carries this
 # image as an initramfs, and TFTP's 16-bit block counter puts a ceiling on it
