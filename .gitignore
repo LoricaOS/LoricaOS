@@ -16,3 +16,16 @@
 # Rotated 2026-07-09 after the prior key leaked in git history.
 /tools/herald-keys/*.key
 /build/herald-keys/
+
+# tools/fuzz build products + generated corpora (harnesses/seeds are tracked)
+/tools/fuzz/fuzz_manifest
+/tools/fuzz/fuzz_tar
+/tools/fuzz/fuzz_repo
+/tools/fuzz/fuzz_dhcp
+/tools/fuzz/tar_pure.o
+/tools/fuzz/trusted_key.h
+/tools/fuzz/corpus_*/
+/tools/fuzz/crash-*
+/tools/fuzz/leak-*
+/tools/fuzz/timeout-*
+/tools/fuzz/oom-*
