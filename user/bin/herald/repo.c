@@ -24,6 +24,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <errno.h>
+#include <limits.h>
 
 typedef struct {
     char url[256];
@@ -100,12 +101,33 @@ static int next_line(const char *buf, size_t len, size_t *off, char *line, size_
 
 /* Compare dotted-numeric versions; 1 if a > b. Exposed (herald_version_gt) so
  * the installer can enforce the anti-rollback guard. */
+/* Consume one dotted component and return its numeric value, saturating rather
+ * than overflowing. The old `long na = na*10 + digit` is signed overflow (UB)
+ * once a component exceeds LONG_MAX (~9.2e18) — 20 digits, or 19 starting
+ * above 9 — and in practice wraps NEGATIVE, which silently inverts the
+ * comparison. Since the caller that matters is the anti-rollback guard in
+ * cmd_install, an inverted result there lets a replayed older package pass as
+ * "not a downgrade". Saturating keeps the ordering monotone. */
+static unsigned long long ver_component(const char **p)
+{
+    const char *s = *p;
+    unsigned long long v = 0;
+    while (*s && *s != '.') {
+        if (*s >= '0' && *s <= '9') {
+            unsigned d = (unsigned)(*s - '0');
+            v = (v > (ULLONG_MAX - d) / 10) ? ULLONG_MAX : v * 10 + d;
+        }
+        s++;
+    }
+    *p = s;
+    return v;
+}
+
 int herald_version_gt(const char *a, const char *b)
 {
     while (*a || *b) {
-        long na = 0, nb = 0;
-        while (*a && *a != '.') { if (*a >= '0' && *a <= '9') na = na*10 + (*a-'0'); a++; }
-        while (*b && *b != '.') { if (*b >= '0' && *b <= '9') nb = nb*10 + (*b-'0'); b++; }
+        unsigned long long na = ver_component(&a);
+        unsigned long long nb = ver_component(&b);
         if (na != nb) return na > nb;
         if (*a == '.') a++;
         if (*b == '.') b++;

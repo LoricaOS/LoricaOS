@@ -5,6 +5,9 @@
 *.a
 *.elf
 
+# `make selftest` scratch dir (host-built parser regression checks)
+/user/bin/herald/.selftest/
+
 # Limine is fetched (pinned in tools/limine/VERSION), not vendored.
 /tools/limine/*
 !/tools/limine/VERSION

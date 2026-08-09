@@ -27,7 +27,18 @@ OUT ?= herald.elf
 $(OUT): $(SRCS) $(HDRS)
 	$(CC) $(CFLAGS) -o $@ $(SRCS) $(LDFLAGS)
 
+# Host-side parser regression checks (no musl, no BearSSL — plain cc). The
+# trusted key is stubbed since nothing under test verifies a signature.
+selftest: selftest.c manifest.c repo.c manifest.h repo.h
+	@mkdir -p .selftest
+	@printf 'static const unsigned char herald_trusted_key[65] = {0x04};\n' \
+	    > .selftest/trusted_key.h
+	cc -O1 -g -Wall -Wextra -I.selftest -DHERALD_ARCH='"$(HERALD_ARCH)"' \
+	    -o .selftest/selftest selftest.c manifest.c repo.c
+	@./.selftest/selftest
+
 clean:
 	rm -f *.elf
+	rm -rf .selftest
 
-.PHONY: clean
+.PHONY: clean selftest
