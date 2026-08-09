@@ -327,7 +327,25 @@ static void
 run_first_boot_setup(void)
 {
     if (access("/etc/aegis/configured", F_OK) == 0) return;   /* already configured */
-    if (access("/bin/configure", X_OK) != 0) return;          /* not shipped (x86) */
+
+    if (access("/bin/configure", X_OK) != 0) {
+        /* Not shipped on this image (x86 ships no /bin/configure; only the Pi
+         * image does). Close the first-boot window anyway.
+         *
+         * The kernel's first-boot exception is armed by the ABSENCE of
+         * /etc/aegis/configured (cap_policy_is_firstboot re-checks it on every
+         * call). caps.d/configure ships on every image and grants
+         * `firstboot AUTH INSTALL` — so returning here without writing the
+         * marker left that grant permanently armed for the life of the system,
+         * attached to a path nothing occupies. Anything that later came to
+         * occupy /bin/configure would inherit AUTH + INSTALL + admin_session
+         * with no credential. Writing the marker when there is nothing to
+         * configure closes the window at the first boot, as intended.
+         * (audit 2026-08-01, A9-H2.) */
+        int fd = open("/etc/aegis/configured", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd >= 0) { write(fd, "1\n", 2); close(fd); sync(); }
+        return;
+    }
     vigil_log("first boot: Configure LoricaOS");
     pid_t pid = fork();
     if (pid == 0) {
