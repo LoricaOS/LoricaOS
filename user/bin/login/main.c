@@ -14,7 +14,6 @@
 #include <termios.h>
 #include <sys/types.h>
 #include <sys/syscall.h>
-#include <sys/file.h>
 
 #include "auth.h"
 
@@ -25,9 +24,6 @@ extern char **environ;
 
 #define SYS_ADMIN_SESSION 517
 #define ADMIN_CRED_FILE   "/etc/aegis/admin"
-/* Serializes admin-elevation attempts so a mandatory per-failure delay can't be
- * outrun by spawning `login -elevate` in parallel (see do_elevate). */
-#define ELEVATE_LOCK      "/run/aegis-elevate.lock"
 
 /* Read a line from fd, stripping trailing newline. */
 static int
@@ -62,19 +58,18 @@ do_elevate(void)
     char password[128];
     int fd, n, ok;
 
-    /* Throttle brute force. do_elevate is the SOLE gate for admin authority, yet
-     * (unlike the interactive login loop) it was unthrottled: any unprivileged
-     * process could fork/exec `login -elevate` in a loop, feeding password
-     * guesses over a pipe, and online-brute-force the admin credential. Two
-     * defenses: (1) hold a global exclusive lock for the whole attempt so
-     * parallel `login -elevate` spawns serialize instead of racing; (2) a
-     * mandatory sleep on every failure — paid before the lock is released, so a
-     * re-exec loop is paced to one guess per FAIL_DELAY no matter how it is
-     * driven. The lock releases when this short-lived process exits. */
-    int lockfd = open(ELEVATE_LOCK, O_CREAT | O_RDWR, 0600);
-    if (lockfd >= 0)
-        flock(lockfd, LOCK_EX);
-
+    /* Throttle brute force. do_elevate is the SOLE gate for admin authority, and
+     * any unprivileged process can fork/exec `login -elevate` in a loop feeding
+     * guesses over a pipe. This once tried to serialize with flock(LOCK_EX) on a
+     * /run lock plus a per-failure sleep — but that was INERT: flock() and
+     * fcntl() record locks are unimplemented in the kernel (ENOSYS / fake
+     * success), and /run is world-writable so the lock file is attacker-
+     * manipulable regardless. With uid cosmetically 0, no userland lock can fix
+     * this, so the throttle now lives where an attacker can't reach it: the
+     * KERNEL paces reads of /etc/aegis/admin by non-admin processes to one per
+     * window, globally (kernel/fs/vfs.c, vfs_open_ex). A throttled attempt gets
+     * -EAGAIN on the open below and fails closed. The per-failure sleep here
+     * stays as a small extra cost on the interactive path. */
     fd = open(ADMIN_CRED_FILE, O_RDONLY);
     if (fd < 0) {
         dprintf(2, "login: no admin credential configured (%s)\n", ADMIN_CRED_FILE);
