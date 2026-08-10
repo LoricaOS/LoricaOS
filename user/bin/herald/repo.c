@@ -24,6 +24,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <errno.h>
+#include <limits.h>
 
 typedef struct {
     char url[256];
@@ -100,12 +101,33 @@ static int next_line(const char *buf, size_t len, size_t *off, char *line, size_
 
 /* Compare dotted-numeric versions; 1 if a > b. Exposed (herald_version_gt) so
  * the installer can enforce the anti-rollback guard. */
+/* Consume one dotted component and return its numeric value, saturating rather
+ * than overflowing. The old `long na = na*10 + digit` is signed overflow (UB)
+ * once a component exceeds LONG_MAX (~9.2e18) — 20 digits, or 19 starting
+ * above 9 — and in practice wraps NEGATIVE, which silently inverts the
+ * comparison. Since the caller that matters is the anti-rollback guard in
+ * cmd_install, an inverted result there lets a replayed older package pass as
+ * "not a downgrade". Saturating keeps the ordering monotone. */
+static unsigned long long ver_component(const char **p)
+{
+    const char *s = *p;
+    unsigned long long v = 0;
+    while (*s && *s != '.') {
+        if (*s >= '0' && *s <= '9') {
+            unsigned d = (unsigned)(*s - '0');
+            v = (v > (ULLONG_MAX - d) / 10) ? ULLONG_MAX : v * 10 + d;
+        }
+        s++;
+    }
+    *p = s;
+    return v;
+}
+
 int herald_version_gt(const char *a, const char *b)
 {
     while (*a || *b) {
-        long na = 0, nb = 0;
-        while (*a && *a != '.') { if (*a >= '0' && *a <= '9') na = na*10 + (*a-'0'); a++; }
-        while (*b && *b != '.') { if (*b >= '0' && *b <= '9') nb = nb*10 + (*b-'0'); b++; }
+        unsigned long long na = ver_component(&a);
+        unsigned long long nb = ver_component(&b);
         if (na != nb) return na > nb;
         if (*a == '.') a++;
         if (*b == '.') b++;
@@ -300,6 +322,70 @@ int repo_sync(void)
     return total;
 }
 
+/* lists_load_verified — load a cached Packages list, re-verifying the FULL
+ * trust chain from the on-disk artifacts before returning a byte of it.
+ *
+ * repo_sync does the right thing at fetch time (verify Release's P-256
+ * signature against the embedded key, then check Packages against the hash the
+ * now-trusted Release pins). But repo_find/repo_search then re-read
+ * <lists>/<key>.Packages with a plain read_file and NO verification at all,
+ * and /var/lib/herald is not in the kernel's install-protected set — baseline
+ * VFS_WRITE is enough to rewrite it. Since cmd_install_named authenticates the
+ * downloaded package ONLY by comparing its SHA-256 to st->sha256 (which comes
+ * out of this file), whoever controls this file controls which bytes get
+ * installed, and install_bytes honours class=system. That is a
+ * baseline-capability process choosing the contents of the system tree.
+ *
+ * Re-verifying here closes it because the root of trust is herald_trusted_key,
+ * which is compiled into this binary — and the binary lives in /bin, which IS
+ * install-protected. Tampering with any cached artifact is therefore detected:
+ * edit Packages and the hash check fails; edit Release to pin your hash and the
+ * signature check fails; supply your own Release.sig and it does not verify
+ * against the embedded key. (audit 2026-08-01 C-5 / A9-C1.)
+ *
+ * Returns 0 and fills the out-parameters on success; nonzero on any failure,
+ * having freed nothing the caller owns. */
+static int lists_load_verified(const herald_source_t *s, const char *key,
+                               unsigned char **out, size_t *outlen)
+{
+    char relpath[520], sigpath[540], pkgpath[520], want[160], wanthash[65], gothash[65];
+    unsigned char *rbuf = NULL, *sbuf = NULL, *pbuf = NULL;
+    size_t rlen = 0, slen = 0, plen = 0;
+    unsigned char dg[32];
+    int rc = -1;
+
+    snprintf(relpath, sizeof(relpath), "%s/%s.Release", HERALD_LISTS_DIR, key);
+    snprintf(sigpath, sizeof(sigpath), "%s.sig", relpath);
+    snprintf(pkgpath, sizeof(pkgpath), "%s/%s.Packages", HERALD_LISTS_DIR, key);
+
+    if (read_file(relpath, &rbuf, &rlen) != 0) goto done;
+    if (read_file(sigpath, &sbuf, &slen) != 0) goto done;
+
+    if (!herald_verify_p256_sha256(herald_trusted_key, sizeof(herald_trusted_key),
+                                   rbuf, rlen, sbuf, slen)) {
+        fprintf(stderr, "herald: cached Release for %s fails signature verification "
+                        "— refusing to use it (run `herald sync`)\n", key);
+        goto done;
+    }
+
+    snprintf(want, sizeof(want), "%s/binary-%s/Packages", s->component, HERALD_ARCH);
+    if (!release_find_hash((char *)rbuf, rlen, want, wanthash)) goto done;
+
+    if (read_file(pkgpath, &pbuf, &plen) != 0) goto done;
+    herald_sha256(pbuf, plen, dg);
+    hex32(dg, gothash);
+    if (strcmp(gothash, wanthash) != 0) {
+        fprintf(stderr, "herald: cached Packages for %s does not match the hash its "
+                        "signed Release pins — refusing to use it (run `herald sync`)\n", key);
+        goto done;
+    }
+
+    *out = pbuf; *outlen = plen; pbuf = NULL; rc = 0;
+done:
+    free(rbuf); free(sbuf); free(pbuf);
+    return rc;
+}
+
 int repo_find(const char *name, herald_stanza_t *out)
 {
     herald_source_t srcs[16];
@@ -315,8 +401,8 @@ int repo_find(const char *name, herald_stanza_t *out)
         size_t plen, off = 0;
         herald_stanza_t st;
         srckey(&srcs[i], key, sizeof(key));
-        snprintf(pkgpath, sizeof(pkgpath), "%s/%s.Packages", HERALD_LISTS_DIR, key);
-        if (read_file(pkgpath, &pbuf, &plen) != 0)
+        (void)pkgpath;
+        if (lists_load_verified(&srcs[i], key, &pbuf, &plen) != 0)
             continue;
         while (parse_stanza((char *)pbuf, plen, &off, &st)) {
             if (strcmp(st.name, name) != 0)
@@ -350,8 +436,10 @@ int repo_search(const char *term)
         size_t plen, off = 0;
         herald_stanza_t st;
         srckey(&srcs[i], key, sizeof(key));
-        snprintf(pkgpath, sizeof(pkgpath), "%s/%s.Packages", HERALD_LISTS_DIR, key);
-        if (read_file(pkgpath, &pbuf, &plen) != 0)
+        (void)pkgpath;
+        /* Same verified load as repo_find: `search` output feeds the name the
+         * user then installs, so an unverified list steers the install. */
+        if (lists_load_verified(&srcs[i], key, &pbuf, &plen) != 0)
             continue;
         any_list = 1;
         while (parse_stanza((char *)pbuf, plen, &off, &st)) {

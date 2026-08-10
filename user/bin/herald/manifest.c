@@ -21,6 +21,25 @@ bounded_copy(char *dst, size_t dstsz, const char *src, size_t n)
     dst[n] = '\0';
 }
 
+/* Is `s` usable as a single path component? Every consumer of id/exec/
+ * caps.<binary> pastes the value straight into a path — /apps/<id>/,
+ * /etc/aegis/caps.d/<exec>, /apps/<id>/<exec> — so a value that is not a real
+ * name escapes the directory it is supposed to name. Rejecting '/' alone is not
+ * enough: "." and ".." contain no separator but are traversal components, and
+ * `herald remove ..` then unlinks /apps/../<exec>, i.e. a file at /.
+ * Returns 1 if safe. */
+int
+manifest_is_bare_name(const char *s)
+{
+    if (s[0] == '\0')
+        return 0;
+    if (strchr(s, '/') != NULL)
+        return 0;
+    if (strcmp(s, ".") == 0 || strcmp(s, "..") == 0)
+        return 0;
+    return 1;
+}
+
 /* Trim trailing CR and spaces/tabs from a NUL-terminated string in place. */
 static void
 rtrim(char *s)
@@ -98,7 +117,7 @@ manifest_parse(const void *buf, size_t len, herald_manifest_t *out)
         }
 
         if (strcmp(key, "id") == 0) {
-            if (strchr(val, '/'))      /* id must be a bare dir name */
+            if (!manifest_is_bare_name(val))    /* id must be a bare dir name */
                 return -1;
             bounded_copy(out->id, sizeof(out->id), val, strlen(val));
         } else if (strcmp(key, "name") == 0) {
@@ -106,7 +125,7 @@ manifest_parse(const void *buf, size_t len, herald_manifest_t *out)
         } else if (strcmp(key, "version") == 0) {
             bounded_copy(out->version, sizeof(out->version), val, strlen(val));
         } else if (strcmp(key, "exec") == 0) {
-            if (strchr(val, '/'))      /* exec is a filename, not a path */
+            if (!manifest_is_bare_name(val))    /* exec is a filename, not a path */
                 return -1;
             bounded_copy(out->exec, sizeof(out->exec), val, strlen(val));
         } else if (strcmp(key, "caps") == 0) {
@@ -115,7 +134,7 @@ manifest_parse(const void *buf, size_t len, herald_manifest_t *out)
             /* Per-binary cap policy: caps.<binary>=<caps>. The binary is an
              * exec basename (no '/'), the value is space-separated cap names. */
             const char *bin = key + 5;
-            if (bin[0] && !strchr(bin, '/') &&
+            if (manifest_is_bare_name(bin) &&
                 out->nbincaps < HERALD_MAX_BINCAPS) {
                 herald_bincap_t *bc = &out->bincaps[out->nbincaps];
                 bounded_copy(bc->binary, sizeof(bc->binary), bin, strlen(bin));

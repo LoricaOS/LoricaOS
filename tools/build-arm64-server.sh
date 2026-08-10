@@ -47,7 +47,9 @@ log "== base admin tools =="
 # does NOT clobber stsh's shell.bin blob (both would otherwise be shell.bin).
 SIMPLE_TOOLS=(vigictl hostname reboot shutdown aegisctl chronos ip dhcp httpd)
 # Tools that need libinstall.a (+ its header) — built after it below.
-INSTALL_TOOLS=(adminpw useradd)
+# 'configure' is the Pi first-boot account setup (thin UI over libinstall); it
+# builds exactly like adminpw/useradd (crypt() comes from musl libc, no -lcrypt).
+INSTALL_TOOLS=(adminpw useradd configure)
 for t in "${SIMPLE_TOOLS[@]}"; do
     src="$REPO/user/bin/$t/main.c"
     [ -f "$src" ] || { log "SKIP $t (no main.c)"; continue; }
@@ -162,6 +164,13 @@ if [ -d "$STAGE/etc/vigil/services" ]; then
             *) rm -rf "$s" ;;               # drop dltest/smpstress/stresssoak/...
         esac
     done
+    # The server image has NO greeter, so its console getty must run regardless
+    # of the kernel's boot= mode. The Pi 5 native kernel hardcodes
+    # `boot=graphical` (the live-desktop cmdline), which would otherwise skip
+    # the text-moded getty and leave a server with no login at all. Blank the
+    # mode → always-run (the mode gate only matters on the desktop image, where
+    # getty and bastion coexist and boot= picks one).
+    [ -f "$STAGE/etc/vigil/services/getty/mode" ] && : > "$STAGE/etc/vigil/services/getty/mode"
 fi
 # 4c. Base binaries → /bin.
 cp "$BLOBS/vigil.bin"  "$STAGE/bin/vigil"
@@ -180,8 +189,14 @@ cp "$CU_OUT"/* "$STAGE/bin/" 2>/dev/null || true
 #     can't write its own home (uid 0 does not bypass DAC in this kernel).
 #     Pre-create Pictures/ (the compositor saves screenshots under it).
 mkdir -p "$STAGE/home/live/Pictures/screenshots"
-chown -R 0:0 "$STAGE/home/live"
 chmod 0755 "$STAGE/bin/"* 2>/dev/null || true
+# Own the ENTIRE tree as uid 0. mke2fs -d preserves the host build uid, and the
+# sources are tar-synced from the Mac (uid 501), so without this every file
+# ships owned by 501. The primary user is uid 0 and does NOT bypass DAC, so a
+# 501-owned /etc/passwd is unwritable even by uid 0 (EACCES — this is what broke
+# first-boot `configure`) and nothing in the image is owned by the live user. A
+# fresh image is entirely uid-0-owned. (Was: only $STAGE/home/live.)
+chown -R 0:0 "$STAGE"
 log "rootfs has $(ls "$STAGE/bin" | wc -l | tr -d ' ') binaries in /bin"
 
 # 5. ext2 image (sized to content + slack). Loaded whole as a Limine module

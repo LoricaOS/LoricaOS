@@ -818,7 +818,7 @@ static int cmd_remove(const char *id)
     char p[256];
     int f;
 
-    if (strchr(id, '/') != NULL) {
+    if (!manifest_is_bare_name(id)) {
         fprintf(stderr, "herald: invalid package id\n");
         return 1;
     }
@@ -840,9 +840,9 @@ static int cmd_remove(const char *id)
      * would otherwise let unlink() escape /apps/<id>/ and delete a system
      * binary or cap policy. The id is already validated above (strchr at the
      * top), so /apps/%s and the id segment are safe; only e.exec needs this. */
-    if (strchr(e.exec, '/') != NULL) {
+    if (!manifest_is_bare_name(e.exec)) {
         fprintf(stderr, "herald: refusing %s: database entry has a malformed "
-                        "exec field '%s' (contains '/')\n", id, e.exec);
+                        "exec field '%s' (not a bare filename)\n", id, e.exec);
         return 1;
     }
 

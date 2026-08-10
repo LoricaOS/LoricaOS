@@ -43,4 +43,10 @@ typedef struct {
  * Returns 0 on success (id, name, version, exec all present & non-empty),
  * negative if a required key is missing or input malformed. */
 int manifest_parse(const void *buf, size_t len, herald_manifest_t *out);
+
+/* Returns 1 if `s` is usable as a single path component — non-empty, no '/',
+ * and not "." or "..". Anything pasted into a path as a name (id, exec, a
+ * caps.d filename, a db-supplied field) must pass this: a value that is not a
+ * real name escapes the directory it was supposed to name. */
+int manifest_is_bare_name(const char *s);
 #endif
