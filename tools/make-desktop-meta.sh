@@ -11,6 +11,15 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 
 VERSION="$(cat VERSION 2>/dev/null || echo 0.0.0)"
 HERALD_KEY="${HERALD_KEY:-tools/herald-keys/herald.key}"
+# When the production signing key is absent (e.g. CI, which has no access to the
+# private tools/herald-keys/herald.key), fall back to the DEV keypair the build
+# already generates via tools/herald-keygen.sh — herald itself is built with the
+# matching dev trust anchor (build/herald-keys/trusted_key.h), so the meta stays
+# verifiable on the resulting image. Generate it if a herald build hasn't yet.
+if [ ! -f "$HERALD_KEY" ]; then
+    HERALD_KEY="build/herald-keys/herald-dev.key"
+    [ -f "$HERALD_KEY" ] || bash tools/herald-keygen.sh >/dev/null
+fi
 LIST=tools/components.list
 DB=build/desktop-overlay.db
 OUT=build/pkgs
