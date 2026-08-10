@@ -1,5 +1,42 @@
 # LoricaOS Changelog
 
+## 1.5.0 — 2026-08-10 (RELEASED)
+
+**Feature + hardening release.** Aegis kernel **v1.4.0** (Pi 5 native boot,
+fuzzing-infra findings, red-team hardening), a first-boot account-setup flow,
+herald supply-chain hardening, and a full two-architecture CI. Consolidates the
+never-released 1.4.0 work. coreutils v1.1.0 (unchanged).
+
+- **First-boot setup — "Configure LoricaOS":** fresh images now run a one-time
+  configurator (admin password, hostname, first user) via vigil's first-boot
+  exception, then self-delete their caps.d + binary so the setup authority does
+  not persist. New account tools (`passwd`/`useradd`/`userdel`/`usermod`/
+  `groupadd`) each get a least-privilege caps.d policy; `AUTH`/`POWER` are gated
+  behind an authenticated admin_session. vigil closes the first-boot window on
+  images that ship no configurator, so it can't be re-triggered.
+- **Kernel → Aegis v1.4.0:** native Raspberry Pi 5 boot, plus the fixes from a
+  memory-safety fuzzing campaign and an authorized password-less-escalation
+  red-team (bounded ext2/FAT parsing, an ADMIN_AUTH capability-tier gap, and a
+  kernel-enforced admin-credential read throttle). See the Aegis v1.4.0 notes.
+- **herald supply-chain hardening:** verify the cached Release→Packages→package
+  hash chain at *use*, not just at sync-time; reject `.`/`..` as bare package/
+  exec/cap names (path-traversal via a name with no slash); fix a version-
+  compare integer overflow.
+- **login credential throttle moved into the kernel:** the brute-force pacing of
+  admin-credential reads is now enforced by the kernel VFS gate; login drops its
+  old inert userland flock.
+- **arm64 desktop at 1:1 parity with x86,** enforced by a CI gate against
+  `tools/components.list`, with a native Pi 5 kernel image built in CI.
+- **CI (both repos green):** x86 desktop/server ISOs, arm64 desktop/server
+  rootfs, and the RPi5-native kernel image all build on every push; releases
+  attach the signed ISOs.
+- **Security — herald signing key rotated:** the prior production key was
+  unavailable, so v1.5.0 is signed by a freshly generated key whose public trust
+  anchor is committed. Older images must update herald's anchor to install
+  packages signed by the new key.
+- **Branding:** LoricaOS across source headers, HTTP User-Agent, shell banner,
+  and version strings; `/etc/lorica-version` exposes the real release.
+
 ## 1.2.2 — 2026-07-12 (RELEASED)
 
 **Security & robustness point release.** Aegis kernel v1.2.2 + coreutils v1.1.0
