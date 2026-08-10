@@ -349,7 +349,7 @@ vendor/coreutils/bin/%: vendor/coreutils/.fetched
 # real clip. But it is a rootfs.manifest entry, so MANIFEST_SRCS_BASE lists it
 # as a prerequisite of $(ROOTFS_SERVER) with NO rule to build it — which broke
 # `make server-iso`/`desktop-iso` with "No rule to make target" on a clean
-# checkout / CI (the same trap the foldingd note in rootfs.manifest describes).
+# checkout / CI.
 # Satisfy it with an empty placeholder when the real clip is not staged: ffsmoke
 # never runs in a normal boot, so empty media is harmless, and ffsmoke-test.sh
 # overwrites this (then rebuilds the rootfs) before the actual decode test. The

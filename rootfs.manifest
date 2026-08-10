@@ -148,19 +148,3 @@ user/bin/rune                   /bin/rune
 # paths= line) and calls sys_install_commit, after which the kernel both grants
 # policy caps to and write-protects the tree. No baked-in placeholder dir is
 # needed (the old static s_ladybird_ino mount-time anchor is gone).
-
-
-# Go static binaries (road-1: GOOS=linux Go runs unmodified on LoricaOS).
-#
-# NOT listed as manifest entries on purpose. MANIFEST_SRCS_BASE (Makefile:331)
-# scrapes every non-comment line into the server-rootfs prerequisites, so a
-# `build/foldingd` entry makes `make server-iso` fail on a clean checkout with
-# "No rule to make target" — the binary is an out-of-tree Go artifact, not
-# something this repo builds. To ship one, stage the binary into build/ and add:
-#     build/foldingd                  /bin/foldingd
-#
-# The caps.d policy beside this comment IS committed and is inert without the
-# binary. It is the load-bearing part: without `service NET_SOCKET`, Go's IPv4
-# probe fails with EPERM, supportsIPv4() goes false, and Go falls back to
-# AF_INET6 — which this kernel does not implement — surfacing as a misleading
-# "address family not supported by protocol" rather than a permissions error.
