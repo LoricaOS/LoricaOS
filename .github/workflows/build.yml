@@ -153,13 +153,11 @@ jobs:
         run: |
           sudo -E bash tools/build-arm64-server.sh
           sudo -E bash tools/build-arm64-desktop.sh
-      - name: Build RPi5 native kernel image (WIP — non-blocking)
-        # The native Pi 5 boot image (Makefile.pi5native) is a work-in-progress
-        # target (see its header); its source list still lacks several of the
-        # shared TUs the reference arm64 build carries, so it does not link yet.
-        # Keep it best-effort so the STABLE artifacts below (the x86 ISOs and the
-        # arm64 server/desktop rootfs) gate CI, not the WIP native image.
-        continue-on-error: true
+      - name: Build RPi5 native kernel image
+        # The bootable RPi5 image is the aegis pi5-native kernel + the desktop
+        # rootfs.ext2 (loaded as the initramfs by the Pi firmware). The aegis
+        # kernel step above generated the Kconfig config Makefile.pi5native now
+        # includes.
         run: |
           make -C "$SRC/aegis" -f Makefile.pi5native kernel
       - uses: actions/upload-artifact@v4
@@ -168,10 +166,5 @@ jobs:
           path: |
             build/arm64-desktop/rootfs.ext2
             build/arm64-server/rootfs.ext2
+            ${{ env.SRC }}/aegis/build/pi5native/pi5-kernel.img
           if-no-files-found: error
-      - uses: actions/upload-artifact@v4
-        continue-on-error: true
-        with:
-          name: loricaos-arm64-pi5native
-          path: ${{ env.SRC }}/aegis/build/pi5native/pi5-kernel.img
-          if-no-files-found: warn
