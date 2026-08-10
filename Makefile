@@ -30,7 +30,7 @@ ROOTFS_SERVER  = $(BUILD)/rootfs-server.img
 CXX_AEGIS       = /opt/aegis-cxx/bin/x86_64-buildroot-linux-musl-g++
 CXX_FLAGS_AEGIS = -static -O2 -std=c++23 -fno-pie -no-pie
 
-.PHONY: all iso desktop-iso desktop-dev-iso server-iso selftest-iso soak-iso ffsmoke-iso ffsmoke-test rootfs build-musl test clean version curl_bin
+.PHONY: all iso desktop-iso desktop-dev-iso server-iso selftest-iso soak-iso ffsmoke-iso ffsmoke-test microvm-image rootfs build-musl test clean version curl_bin
 all: iso
 
 # ── Kernel artifact: fetched, not built ─────────────────────────────────────
@@ -296,6 +296,12 @@ $(BUILD)/loricaos-server.iso: $(KERNEL_STRIPPED) $(ROOTFS_SERVER) $(ESP_SERVER) 
 desktop-iso: $(BUILD)/loricaos-desktop.iso
 server-iso:  $(BUILD)/loricaos-server.iso
 iso: desktop-iso server-iso
+
+# Firecracker / cloud-hypervisor / qemu-microvm image: the Aegis microvm kernel
+# + the server rootfs.ext2 + a runnable vm.json, packaged as a tarball. See
+# tools/build-microvm-image.sh.
+microvm-image:
+	bash tools/build-microvm-image.sh
 
 # ── Developer / boot-profiling desktop ISO (NOT shipped) ─────────────────────
 # Same desktop rootfs (autologin already baked into ROOTFS_DESKTOP below), but a

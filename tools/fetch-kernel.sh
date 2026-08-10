@@ -18,6 +18,7 @@ ARCH="${3:-${ARCH:-x86_64}}"
 
 case "$ARCH" in
     arm64|aarch64) SUFFIX="-arm64" ;;
+    microvm) SUFFIX="-microvm" ;;   # PVH/virtio-mmio kernel for Firecracker et al.
     x86_64|amd64|"") SUFFIX="" ;;
     *) echo "[fetch-kernel] ERROR: unknown arch '$ARCH'" >&2; exit 1 ;;
 esac
