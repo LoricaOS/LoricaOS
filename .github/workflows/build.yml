@@ -32,6 +32,27 @@ jobs:
     needs: parity
     steps:
       - uses: actions/checkout@v4
+      - name: Ephemeral herald signing key (no production key in CI)
+        # The desktop meta-package is signed with tools/herald-keys/herald.key
+        # (the PRODUCTION private key, gitignored) — unavailable in CI. Mint a
+        # throwaway P-256 keypair and overwrite the committed public-only anchor
+        # with its match, so herald and the meta share a trust anchor. These are
+        # build-validation ISOs, not production releases (they can only install
+        # dev-key-signed packages).
+        run: |
+          mkdir -p tools/herald-keys
+          openssl ecparam -name prime256v1 -genkey -noout -out tools/herald-keys/herald.key
+          POINT=$(openssl ec -in tools/herald-keys/herald.key -pubout -outform DER 2>/dev/null \
+                  | tail -c 65 | od -An -v -tx1 | tr -d ' \n')
+          {
+            echo "/* CI ephemeral dev signing key — not for release. */"
+            echo "#ifndef HERALD_TRUSTED_KEY_H"
+            echo "#define HERALD_TRUSTED_KEY_H"
+            echo "static const unsigned char herald_trusted_key[65] = {"
+            echo "$POINT" | sed 's/\(..\)/0x\1,/g' | fold -w 60 | sed 's/^/    /'
+            echo "};"
+            echo "#endif"
+          } > tools/herald-keys/trusted_key.h
       - name: Install toolchain
         run: |
           sudo apt-get update
@@ -69,6 +90,21 @@ jobs:
       # it there fails the whole workflow at parse time (0s, no logs).
       - name: Set source dir
         run: echo "SRC=${{ runner.temp }}/src" >> "$GITHUB_ENV"
+      - name: Ephemeral herald signing key (no production key in CI)
+        run: |
+          mkdir -p tools/herald-keys
+          openssl ecparam -name prime256v1 -genkey -noout -out tools/herald-keys/herald.key
+          POINT=$(openssl ec -in tools/herald-keys/herald.key -pubout -outform DER 2>/dev/null \
+                  | tail -c 65 | od -An -v -tx1 | tr -d ' \n')
+          {
+            echo "/* CI ephemeral dev signing key — not for release. */"
+            echo "#ifndef HERALD_TRUSTED_KEY_H"
+            echo "#define HERALD_TRUSTED_KEY_H"
+            echo "static const unsigned char herald_trusted_key[65] = {"
+            echo "$POINT" | sed 's/\(..\)/0x\1,/g' | fold -w 60 | sed 's/^/    /'
+            echo "};"
+            echo "#endif"
+          } > tools/herald-keys/trusted_key.h
       - name: Install aarch64 cross toolchain + image tools
         run: |
           sudo apt-get update
@@ -121,7 +157,7 @@ jobs:
         # The bootable RPi5 image is the aegis pi5-native kernel + the desktop
         # rootfs.ext2 (loaded as the initramfs by the Pi firmware).
         run: |
-          make -C /root/aegis -f Makefile.pi5native kernel
+          make -C "$SRC/aegis" -f Makefile.pi5native kernel
       - uses: actions/upload-artifact@v4
         with:
           name: loricaos-arm64
