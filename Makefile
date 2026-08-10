@@ -344,6 +344,20 @@ vendor/coreutils/.fetched: COREUTILS_VERSION tools/fetch-coreutils.sh
 vendor/coreutils/bin/%: vendor/coreutils/.fetched
 	@test -f '$@' || { echo "coreutils: $@ missing from fetched package" >&2; exit 1; }
 
+# ffsmoke's H.264 test clip is a cmdline-gated TEST asset — ffsmoke only runs
+# with `ffsmoke` on the kernel cmdline, and tools/ffsmoke-test.sh fetches the
+# real clip. But it is a rootfs.manifest entry, so MANIFEST_SRCS_BASE lists it
+# as a prerequisite of $(ROOTFS_SERVER) with NO rule to build it — which broke
+# `make server-iso`/`desktop-iso` with "No rule to make target" on a clean
+# checkout / CI (the same trap the foldingd note in rootfs.manifest describes).
+# Satisfy it with an empty placeholder when the real clip is not staged: ffsmoke
+# never runs in a normal boot, so empty media is harmless, and ffsmoke-test.sh
+# overwrites this (then rebuilds the rootfs) before the actual decode test. The
+# rule has no prerequisites, so make leaves a real, already-fetched clip alone.
+build/ffsmoke-media/clip.mp4:
+	@mkdir -p $(@D)
+	@: > $@
+
 # No kernel in the rootfs image: the installed system boots the kernel from the
 # FAT ESP (boot():/boot/aegis.elf) — see the ESP rules above.
 $(ROOTFS_SERVER): $(MANIFEST_SRCS_BASE) $(SKELETON_FILES_BASE)
