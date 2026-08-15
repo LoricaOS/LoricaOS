@@ -1,5 +1,27 @@
 # LoricaOS Changelog
 
+## 1.6.1 — 2026-08-15 (RELEASED)
+
+**Bare-metal and desktop recovery release.** Aegis **v1.5.1** restores reliable
+multi-core startup and prevents systems without a legacy COM1 UART from hanging
+inside their first timer interrupt. Lumen **v1.3.0** restores the compositor IPC
+endpoint and makes desktop-service failures visible.
+
+- **Bare-metal SMP:** use the architectural INIT-SIPI-SIPI startup sequence and
+  service incoming TLB shootdowns while the BSP waits for each AP.
+- **Absent-UART handling:** reject the `0xff` line status returned by missing
+  COM1 hardware and bound serial receive work per timer tick.
+- **Desktop IPC:** Lumen v1.3.0 now holds the specific `IPC_BIND` authority
+  required to publish `/run/lumen.sock`, restoring the desktop shell and dock;
+  Glyph v1.2.3 supplies its matching panel/protocol API.
+- **Error Viewer:** Vigil records failed managed services in
+  `/run/vigil-errors.log`; Lumen displays those failures in a built-in viewer
+  and also surfaces direct application-launch failures. The About window uses
+  neutral OpenAI/Anthropic model attribution with no vendor logo.
+- **Validated:** 16-CPU bare-metal server and desktop boots, Bastion autologin,
+  Lumen, shell, and dock startup; a missing-shell fault injection exercises the
+  new visible error path.
+
 ## 1.6.0 — 2026-08-15 (RELEASED)
 
 **Fair scheduling and stability release.** Aegis kernel **v1.5.0** replaces

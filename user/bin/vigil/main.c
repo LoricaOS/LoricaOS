@@ -17,6 +17,7 @@
 #define VIGIL_CMD_PATH      "/run/vigil.cmd"
 #define VIGIL_SERVICES_DIR  "/etc/vigil/services"
 #define VIGIL_PID_PATH      "/run/vigil.pid"
+#define VIGIL_ERROR_LOG     "/run/vigil-errors.log"
 
 typedef enum { POLICY_RESPAWN, POLICY_ONESHOT } policy_t;
 
@@ -107,6 +108,24 @@ read_file(const char *path, char *buf, int bufsz)
 }
 
 static void
+service_error(const service_t *s, const char *detail)
+{
+    char line[256];
+    int n = snprintf(line, sizeof(line), "%s: %s\n",
+                     s && s->name[0] ? s->name : "service",
+                     detail ? detail : "failed");
+    if (n <= 0) return;
+    if (n >= (int)sizeof(line)) n = (int)sizeof(line) - 1;
+    int fd = open(VIGIL_ERROR_LOG, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd >= 0) {
+        write(fd, line, (size_t)n);
+        close(fd);
+    }
+    write(2, "[VIGIL-ERROR] ", 14);
+    write(2, line, (size_t)n);
+}
+
+static void
 load_service(const char *name)
 {
     if (s_nsvc >= VIGIL_MAX_SERVICES) {
@@ -191,7 +210,13 @@ start_service(service_t *s)
         }
         _exit(127);
     }
-    if (pid > 0) s->pid = pid;
+    if (pid > 0) {
+        s->pid = pid;
+    } else if (pid < 0) {
+        char detail[64];
+        snprintf(detail, sizeof(detail), "fork failed (errno=%d)", errno);
+        service_error(s, detail);
+    }
 }
 
 static void
@@ -422,6 +447,7 @@ main(void)
 
     /* write PID file */
     {
+        unlink(VIGIL_ERROR_LOG);
         char pidbuf[32];
         int n = snprintf(pidbuf, sizeof(pidbuf), "%d\n", (int)getpid());
         int fd = open(VIGIL_PID_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -486,6 +512,17 @@ main(void)
             for (i = 0; i < s_nsvc; i++) {
                 if (s_svcs[i].pid != dead) continue;
                 s_svcs[i].pid = -1;
+                if ((WIFEXITED(status) && WEXITSTATUS(status) != 0) ||
+                    WIFSIGNALED(status)) {
+                    char detail[80];
+                    if (WIFSIGNALED(status))
+                        snprintf(detail, sizeof(detail), "terminated by signal %d",
+                                 WTERMSIG(status));
+                    else
+                        snprintf(detail, sizeof(detail), "exited with status %d",
+                                 WEXITSTATUS(status));
+                    service_error(&s_svcs[i], detail);
+                }
                 if (!s_svcs[i].active)
                     break;
                 if (s_svcs[i].policy == POLICY_ONESHOT) {
