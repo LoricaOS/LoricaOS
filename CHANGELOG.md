@@ -1,5 +1,32 @@
 # LoricaOS Changelog
 
+## 1.6.0 — 2026-08-15 (RELEASED)
+
+**Fair scheduling and stability release.** Aegis kernel **v1.5.0** replaces
+fixed-core scheduling with a shared x86-64/arm64 virtual-runtime fair scheduler,
+while preserving the prior round-robin policy as the `sched=rr` boot fallback.
+
+- **Cross-architecture fair scheduler:** equal-weight measured runtime, per-CPU
+  ordered run queues, soft cache affinity, idle work stealing, scheduler policy
+  selection at boot, and `/proc/scheduler` diagnostics. `sched_getaffinity`
+  reports the CPUs the kernel can actually schedule.
+- **SMP timer consistency:** arm64 now matches x86-64 by running global timer,
+  poll, entropy, and waiter maintenance once on the boot CPU while every CPU
+  retains its local preemption tick.
+- **Kernel stability:** TCP transmissions snapshot connection state before
+  dropping the lock, closing reusable-slot races; xHCI controller state is no
+  longer shared across controllers, failed/hot-unplugged slots release their
+  pages, and USB Ethernet routes doorbells to its owning controller.
+- **Userspace stability:** chronos cannot block forever waiting for an SNTP
+  reply; stsh closes every pipeline descriptor after a fork failure; vigil
+  retries transient service-start failures and makes explicit restart recover
+  services that exhausted their automatic restart budget. `vigictl` now ships
+  its explicit service capability policy.
+- **Validated on both architectures:** the fair default and `sched=rr` fallback
+  pass the full Aegis capability/userland suites on four-CPU x86-64 and arm64
+  QEMU systems, including SMP fork, blocking I/O, signals, threads, and hostile
+  syscall tests.
+
 ## 1.5.0 — 2026-08-10 (RELEASED)
 
 **Feature + hardening release.** Aegis kernel **v1.4.0** (Pi 5 native boot,

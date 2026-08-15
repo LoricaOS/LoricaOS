@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <time.h>
+#include <sys/time.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -65,6 +66,14 @@ int main(void)
         int fd = socket(AF_INET, SOCK_DGRAM, 0);
         if (fd < 0) {
             fprintf(stderr, "chronos: socket failed\n");
+            sleep(60);
+            continue;
+        }
+        struct timeval timeout = { 10, 0 };
+        if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO,
+                       &timeout, sizeof(timeout)) < 0) {
+            fprintf(stderr, "chronos: receive timeout setup failed\n");
+            close(fd);
             sleep(60);
             continue;
         }
