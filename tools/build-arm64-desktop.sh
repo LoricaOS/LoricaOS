@@ -111,11 +111,11 @@ install_bin /root/lumen/lumen.elf          lumen
 install_bin /root/bastion/bastion.elf      bastion
 install_bin /root/citadel-dock/dock.elf    citadel-dock
 install_bin /root/lumen-shell/shell.elf    lumen-shell
-# assets → /usr/share (wallpaper/logo/claude) + /usr/share/fonts (ttf)
+# assets → /usr/share (wallpaper/logo) + /usr/share/fonts (ttf)
 mkdir -p "$STAGE/usr/share/fonts"
 cp /root/lumen/assets/*.ttf                 "$STAGE/usr/share/fonts/" 2>/dev/null || true
 cp /root/lumen/assets/wallpaper.* /root/lumen/assets/logo.raw \
-   /root/lumen/assets/claude.raw            "$STAGE/usr/share/"       2>/dev/null || true
+   "$STAGE/usr/share/" 2>/dev/null || true
 # capability policies (from each component's pkg/)
 cp /root/lumen/pkg/caps.d/lumen                          "$STAGE/etc/aegis/caps.d/" 2>/dev/null || true
 cp /root/bastion/pkg/etc/aegis/caps.d/bastion            "$STAGE/etc/aegis/caps.d/" 2>/dev/null || true

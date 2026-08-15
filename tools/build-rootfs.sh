@@ -7,10 +7,9 @@
 #
 set -euo pipefail
 
-ROOTFS_IMG="${1:?Usage: build-rootfs.sh <output.img> [wallpaper.raw] [logo.raw] [claude.raw]}"
+ROOTFS_IMG="${1:?Usage: build-rootfs.sh <output.img> [wallpaper.raw] [logo.raw]}"
 WALLPAPER_RAW="${2:-}"
 LOGO_RAW="${3:-}"
-CLAUDE_RAW="${4:-}"
 
 # Profile selects which manifests + skeleton trees compose the image:
 #   desktop (default): base + graphical (compositor, toolkit, GUI apps, fonts)
@@ -193,7 +192,7 @@ ensure_dir "/usr"
 ensure_dir "/usr/share"
 
 if [[ "$WANT_ASSETS" == 1 ]]; then
-    for raw_file in "$WALLPAPER_RAW" "$LOGO_RAW" "$CLAUDE_RAW"; do
+    for raw_file in "$WALLPAPER_RAW" "$LOGO_RAW"; do
         if [[ -n "$raw_file" && -f "$raw_file" && -s "$raw_file" ]]; then
             name="$(basename "$raw_file")"
             debugfs_run "write $raw_file /usr/share/$name"
