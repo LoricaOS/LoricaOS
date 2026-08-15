@@ -1,5 +1,21 @@
 # LoricaOS Changelog
 
+## 1.6.2 — 2026-08-15 (RELEASED)
+
+**Desktop application compatibility release.** Lumen **v1.3.1** accepts and
+translates the larger menu frames emitted by existing Glyph 1.2.2-era apps,
+preventing their compositor connection from closing immediately after launch.
+Video **v1.2.1** now opens a useful idle window when launched without a file
+instead of exiting with a usage error.
+
+- **Existing desktop apps:** legacy 8-column/16-item menus are safely clamped
+  into the current 6-column/12-item wire format.
+- **Video launcher:** a no-argument launch stays open and directs the user to
+  select a video through Files; playback behavior with a path is unchanged.
+- **Validated:** legacy Calculator and Files packages remain open through both
+  direct and dock-style launches; Video remains open without a path; Lumen,
+  shell, and dock stay healthy on a 16-vCPU desktop boot.
+
 ## 1.6.1 — 2026-08-15 (RELEASED)
 
 **Bare-metal and desktop recovery release.** Aegis **v1.5.1** restores reliable
