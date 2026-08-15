@@ -254,9 +254,8 @@ $(ESP_SERVER): $(LIMINE_DIR)/BOOTX64.EFI $(LIMINE_DIR)/BOOTIA32.EFI $(KERNEL_STR
 	$(call ESP_RULE,$@,server-installed)
 
 # ── Wallpaper / logo conversion ──���───────────────────────────────────────────
-# Logo + Claude raster assets now ship with the lumen compositor package
-# (LoricaOS/lumen: assets/logo.raw + claude.raw); the desktop image fetches them,
-# so there is no logo-conversion step in this build.
+# Logo assets ship with the Lumen compositor package, so there is no
+# logo-conversion step in this build.
 
 # (No wallpaper.raw: the default desktop is a compositor-drawn gradient with
 # the Aegis logo centered. Drop a wallpaper.raw into /usr/share to override.)
