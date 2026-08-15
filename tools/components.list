@@ -6,7 +6,7 @@
 #
 # gui-installer is NOT here — it is the live-ISO installer, built in-tree and
 # auto-removed on installed systems.
-lumen 1.3.0 4fc6e77be86ca86180011ab365e1c6aa776e76d9a19e2ddea51bfde2b922a8c8
+lumen 1.3.0 3dc6e987f09a4d97ecb3dd08801ed41ccce84f77db2b4f43879be6433f672ec6
 bastion 1.2.0 13289907f64f82e87694dee3d6305ea7411d9da91078ffcc07ea756e55bd3ce1
 citadel-dock 1.2.2 413b1fcdefacea7cfb62085b6715120f7eb0eef771ce7275f9dc7c7302c17744
 lumen-shell 1.0.1 915deb91c5c1c4a1176387249fc09775a55fdb75a395258871855f61d2a7523e
