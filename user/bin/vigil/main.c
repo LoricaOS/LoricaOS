@@ -271,8 +271,13 @@ process_cmd(void)
         if (strcmp(cmd, "stop") == 0 || strcmp(cmd, "restart") == 0) {
             if (s_svcs[i].pid > 0) kill(s_svcs[i].pid, SIGTERM);
             s_svcs[i].active = (strcmp(cmd, "restart") == 0) ? 1 : 0;
+            if (s_svcs[i].active) {
+                s_svcs[i].restarts = 0;
+                if (s_svcs[i].pid <= 0) start_service(&s_svcs[i]);
+            }
         } else if (strcmp(cmd, "start") == 0) {
             s_svcs[i].active = 1;
+            s_svcs[i].restarts = 0;
             start_service(&s_svcs[i]);
         }
     }
@@ -481,8 +486,12 @@ main(void)
             for (i = 0; i < s_nsvc; i++) {
                 if (s_svcs[i].pid != dead) continue;
                 s_svcs[i].pid = -1;
-                if (!s_svcs[i].active || s_svcs[i].policy == POLICY_ONESHOT)
+                if (!s_svcs[i].active)
                     break;
+                if (s_svcs[i].policy == POLICY_ONESHOT) {
+                    s_svcs[i].active = 0;
+                    break;
+                }
                 if (s_svcs[i].restarts >= s_svcs[i].max_restarts) {
                     vigil_log(s_svcs[i].name);
                     s_svcs[i].active = 0;
@@ -493,6 +502,13 @@ main(void)
                 break;
             }
         }
+
+        /* A transient fork failure leaves pid=-1. Retry active services once
+         * per supervisor pass; completed oneshots and exhausted services are
+         * marked inactive above and stay stopped. */
+        for (i = 0; i < s_nsvc; i++)
+            if (s_svcs[i].active && s_svcs[i].pid <= 0)
+                start_service(&s_svcs[i]);
 
         struct timespec ts = { 1, 0 };
         nanosleep(&ts, NULL);

@@ -89,6 +89,11 @@ run_pipeline(cmd_t *cmds, int n, char **envp, int *last_exit)
     int pipes[MAX_PIPELINE - 1][2];
     int i, j;
 
+    if (n < 1 || n > MAX_PIPELINE) {
+        *last_exit = 1;
+        return;
+    }
+
     /* Create n-1 pipes */
     for (i = 0; i < n - 1; i++) {
         if (pipe(pipes[i]) < 0) {
@@ -108,7 +113,7 @@ run_pipeline(cmd_t *cmds, int n, char **envp, int *last_exit)
         pid_t pid = fork();
         if (pid < 0) {
             perror("fork");
-            for (j = i; j < n - 1; j++) {
+            for (j = 0; j < n - 1; j++) {
                 close(pipes[j][0]);
                 close(pipes[j][1]);
             }
@@ -211,12 +216,6 @@ run_pipeline(cmd_t *cmds, int n, char **envp, int *last_exit)
     /* Set last stage as foreground */
     sys_setfg((long)pids[n - 1]);
 
-    /* Forward SIGINT to children so Ctrl-C kills the foreground command */
-    static pid_t s_child_pids[MAX_PIPELINE];
-    static int   s_nchildren;
-    s_nchildren = n;
-    for (i = 0; i < n; i++) s_child_pids[i] = pids[i];
-
     struct sigaction sa_int, sa_old;
     memset(&sa_int, 0, sizeof(sa_int));
     sa_int.sa_handler = SIG_DFL;
@@ -268,7 +267,7 @@ run_pipeline_bg(cmd_t *cmds, int n, char **envp)
         pid_t pid = fork();
         if (pid < 0) {
             perror("fork");
-            for (j = i; j < n - 1; j++) {
+            for (j = 0; j < n - 1; j++) {
                 close(pipes[j][0]);
                 close(pipes[j][1]);
             }
