@@ -7,6 +7,7 @@
 
 # `make selftest` scratch dir (host-built parser regression checks)
 /user/bin/herald/.selftest/
+/user/bin/lorica-update/.selftest
 
 # Limine is fetched (pinned in tools/limine/VERSION), not vendored.
 /tools/limine/*
