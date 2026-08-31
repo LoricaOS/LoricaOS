@@ -17,7 +17,16 @@
 #define VIGIL_CMD_PATH      "/run/vigil.cmd"
 #define VIGIL_SERVICES_DIR  "/etc/vigil/services"
 #define VIGIL_PID_PATH      "/run/vigil.pid"
+#ifndef VIGIL_ERROR_LOG
 #define VIGIL_ERROR_LOG     "/run/vigil-errors.log"
+#endif
+#ifndef VIGIL_LOG_DIR
+#define VIGIL_LOG_DIR       "/var/log"
+#endif
+#define VIGIL_LOG           VIGIL_LOG_DIR "/vigil.log"
+#define VIGIL_PREVIOUS_LOG  VIGIL_LOG_DIR "/vigil.previous.log"
+#define VIGIL_LOG_MAX       (64 * 1024)
+#define VIGIL_ERROR_MAX     128
 
 typedef enum { POLICY_RESPAWN, POLICY_ONESHOT } policy_t;
 
@@ -32,6 +41,7 @@ typedef struct {
     pid_t    pid;
     int      restarts;
     int      active;
+    int      expected_stop;
 } service_t;
 
 static service_t s_svcs[VIGIL_MAX_SERVICES];
@@ -41,6 +51,8 @@ static volatile int s_got_term  = 0;
 static char s_boot_mode[16] = "text"; /* default to text if no cmdline */
 static char s_cmdline[256]  = "";     /* kernel cmdline (for service gating) */
 static int  s_quiet = 0;             /* 1 = suppress startup messages */
+static char s_boot_id[33];
+static int  s_error_count = 0;
 
 struct linux_dirent64 {
     unsigned long long d_ino;
@@ -108,6 +120,178 @@ read_file(const char *path, char *buf, int bufsz)
 }
 
 static void
+write_all(int fd, const char *buf, size_t len)
+{
+    while (len > 0) {
+        ssize_t n = write(fd, buf, len);
+        if (n <= 0) return;
+        buf += n;
+        len -= (size_t)n;
+    }
+}
+
+static void
+persistent_log(const char *level, const char *subject, const char *detail)
+{
+    char line[512];
+    int n = snprintf(line, sizeof(line), "boot=%s ms=%lu level=%s %s: %s\n",
+                     s_boot_id[0] ? s_boot_id : "unknown", prof_ms(), level,
+                     subject ? subject : "vigil", detail ? detail : "");
+    if (n <= 0) return;
+    if (n >= (int)sizeof(line)) n = (int)sizeof(line) - 1;
+
+    int fd = open(VIGIL_LOG, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd < 0) return;
+    struct stat st;
+    if (fstat(fd, &st) == 0 && st.st_size + n <= VIGIL_LOG_MAX)
+        write_all(fd, line, (size_t)n);
+    close(fd);
+}
+
+typedef struct {
+    int exists;
+    int clean;
+    int errors;
+    char boot_id[33];
+} previous_boot_t;
+
+static previous_boot_t
+read_previous_boot(void)
+{
+    previous_boot_t p;
+    memset(&p, 0, sizeof(p));
+    FILE *f = fopen(VIGIL_PREVIOUS_LOG, "r");
+    if (!f) return p;
+    p.exists = 1;
+    char line[512];
+    while (fgets(line, sizeof(line), f)) {
+        if (!p.boot_id[0] && strncmp(line, "boot=", 5) == 0) {
+            size_t n = strcspn(line + 5, " \r\n");
+            if (n > 32) n = 32;
+            memcpy(p.boot_id, line + 5, n);
+            p.boot_id[n] = '\0';
+        }
+        if (strstr(line, "end=clean")) p.clean = 1;
+        if (strstr(line, "level=error") || strstr(line, "level=panic"))
+            p.errors++;
+    }
+    fclose(f);
+    return p;
+}
+
+static void
+make_boot_id(void)
+{
+    unsigned char raw[16];
+    int random_fd = open("/dev/urandom", O_RDONLY);
+    ssize_t n = random_fd >= 0 ? read(random_fd, raw, sizeof(raw)) : -1;
+    if (random_fd >= 0) close(random_fd);
+    if (n != (ssize_t)sizeof(raw)) {
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        unsigned long x = (unsigned long)ts.tv_nsec ^
+                          (unsigned long)ts.tv_sec ^ (unsigned long)getpid();
+        for (size_t i = 0; i < sizeof(raw); i++) {
+            x = x * 1103515245UL + 12345UL;
+            raw[i] = (unsigned char)(x >> 16);
+        }
+    }
+    static const char hex[] = "0123456789abcdef";
+    for (size_t i = 0; i < sizeof(raw); i++) {
+        s_boot_id[i * 2] = hex[raw[i] >> 4];
+        s_boot_id[i * 2 + 1] = hex[raw[i] & 15];
+    }
+    s_boot_id[32] = '\0';
+}
+
+static void
+log_kernel_summary(void)
+{
+    char buf[4096];
+    int n = read_file("/proc/dmesg", buf, sizeof(buf));
+    if (n <= 0) return;
+
+    const char *kind = NULL;
+    const char *hit = strstr(buf, "[PANIC]");
+    if (hit) kind = "panic";
+    if (!hit) {
+        hit = strstr(buf, "[ASSERT] FAIL");
+        if (hit) kind = "panic";
+    }
+    if (!hit) {
+        hit = strstr(buf, "not cleanly unmounted");
+        if (hit) kind = "warning";
+    }
+    if (!hit) return;
+
+    const char *start = hit;
+    while (start > buf && start[-1] != '\n') start--;
+    size_t len = strcspn(start, "\r\n");
+    char summary[256];
+    if (len >= sizeof(summary)) len = sizeof(summary) - 1;
+    memcpy(summary, start, len);
+    summary[len] = '\0';
+    persistent_log(kind, "kernel", summary);
+
+    char line[320];
+    int out = snprintf(line, sizeof(line), "Kernel: %s\n", summary);
+    int fd = open(VIGIL_ERROR_LOG, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd >= 0) {
+        if (out > 0) write_all(fd, line, (size_t)out);
+        close(fd);
+    }
+}
+
+static void
+diagnostics_init(void)
+{
+    mkdir("/var", 0755);
+    mkdir(VIGIL_LOG_DIR, 0755);
+
+    struct stat st;
+    int fresh_log = 1;
+    if (stat(VIGIL_LOG, &st) == 0 &&
+        rename(VIGIL_LOG, VIGIL_PREVIOUS_LOG) != 0) {
+        static const char msg[] = "[VIGIL-ERROR] cannot rotate persistent log\n";
+        write(2, msg, sizeof(msg) - 1);
+        fresh_log = 0;  /* preserve the old log instead of truncating it */
+    }
+
+    make_boot_id();
+    int fd = open(VIGIL_LOG, O_WRONLY | O_CREAT |
+                  (fresh_log ? O_TRUNC : O_APPEND), 0644);
+    if (fd >= 0) close(fd);
+    unlink(VIGIL_ERROR_LOG);
+    char start[48];
+    snprintf(start, sizeof(start), "start mode=%s", s_boot_mode);
+    persistent_log("info", "vigil", start);
+    log_kernel_summary();
+
+    previous_boot_t prev = read_previous_boot();
+    if (!prev.exists || (prev.clean && prev.errors == 0)) return;
+
+    char line[256];
+    int n = 0;
+    if (!prev.clean)
+        n = snprintf(line, sizeof(line),
+                     "Previous boot %.32s ended uncleanly (panic, reset, or power loss); see %s\n",
+                     prev.boot_id[0] ? prev.boot_id : "unknown", VIGIL_PREVIOUS_LOG);
+    else
+        n = snprintf(line, sizeof(line),
+                     "Previous boot %.32s recorded %d error(s); see %s\n",
+                     prev.boot_id[0] ? prev.boot_id : "unknown", prev.errors,
+                     VIGIL_PREVIOUS_LOG);
+    fd = open(VIGIL_ERROR_LOG, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd >= 0) {
+        if (n > 0) write_all(fd, line, (size_t)n);
+        close(fd);
+    }
+    if (!prev.clean)
+        persistent_log("warning", "previous-boot",
+                       "ended uncleanly (panic, reset, or power loss)");
+}
+
+static void
 service_error(const service_t *s, const char *detail)
 {
     char line[256];
@@ -116,10 +300,19 @@ service_error(const service_t *s, const char *detail)
                      detail ? detail : "failed");
     if (n <= 0) return;
     if (n >= (int)sizeof(line)) n = (int)sizeof(line) - 1;
-    int fd = open(VIGIL_ERROR_LOG, O_WRONLY | O_CREAT | O_APPEND, 0644);
-    if (fd >= 0) {
-        write(fd, line, (size_t)n);
-        close(fd);
+    /* ponytail: bound a pathological fork/respawn failure storm; add a real
+     * log queue only if dropping beyond 128 errors per boot becomes useful. */
+    if (s_error_count < VIGIL_ERROR_MAX) {
+        int fd = open(VIGIL_ERROR_LOG, O_WRONLY | O_CREAT | O_APPEND, 0644);
+        if (fd >= 0) {
+            write_all(fd, line, (size_t)n);
+            close(fd);
+        }
+        persistent_log("error", s && s->name[0] ? s->name : "service", detail);
+        s_error_count++;
+    } else if (s_error_count == VIGIL_ERROR_MAX) {
+        persistent_log("error", "vigil", "error limit reached; later errors are console-only");
+        s_error_count++;
     }
     write(2, "[VIGIL-ERROR] ", 14);
     write(2, line, (size_t)n);
@@ -294,7 +487,10 @@ process_cmd(void)
     for (i = 0; i < s_nsvc; i++) {
         if (strcmp(s_svcs[i].name, svc_name) != 0) continue;
         if (strcmp(cmd, "stop") == 0 || strcmp(cmd, "restart") == 0) {
-            if (s_svcs[i].pid > 0) kill(s_svcs[i].pid, SIGTERM);
+            if (s_svcs[i].pid > 0) {
+                s_svcs[i].expected_stop = 1;
+                kill(s_svcs[i].pid, SIGTERM);
+            }
             s_svcs[i].active = (strcmp(cmd, "restart") == 0) ? 1 : 0;
             if (s_svcs[i].active) {
                 s_svcs[i].restarts = 0;
@@ -445,9 +641,24 @@ main(void)
         vigil_log(msg);
     }
 
+    diagnostics_init();
+
+    if (access("/var/lib/lorica-update/pending", F_OK) == 0 ||
+        access("/var/lib/herald/transaction/state", F_OK) == 0) {
+        static const char detail[] =
+            "System update incomplete; run lorica-update to finish, or "
+            "'herald recover rollback'";
+        int fd = open(VIGIL_ERROR_LOG, O_WRONLY | O_CREAT | O_APPEND, 0644);
+        if (fd >= 0) {
+            write_all(fd, detail, sizeof(detail) - 1);
+            write_all(fd, "\n", 1);
+            close(fd);
+        }
+        persistent_log("error", "lorica-update", detail);
+    }
+
     /* write PID file */
     {
-        unlink(VIGIL_ERROR_LOG);
         char pidbuf[32];
         int n = snprintf(pidbuf, sizeof(pidbuf), "%d\n", (int)getpid());
         int fd = open(VIGIL_PID_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -512,8 +723,10 @@ main(void)
             for (i = 0; i < s_nsvc; i++) {
                 if (s_svcs[i].pid != dead) continue;
                 s_svcs[i].pid = -1;
-                if ((WIFEXITED(status) && WEXITSTATUS(status) != 0) ||
-                    WIFSIGNALED(status)) {
+                int expected_stop = s_svcs[i].expected_stop;
+                s_svcs[i].expected_stop = 0;
+                if (!expected_stop && ((WIFEXITED(status) && WEXITSTATUS(status) != 0) ||
+                    WIFSIGNALED(status))) {
                     char detail[80];
                     if (WIFSIGNALED(status))
                         snprintf(detail, sizeof(detail), "terminated by signal %d",
@@ -552,6 +765,7 @@ main(void)
     }
 
     shutdown_all();
+    persistent_log("info", "vigil", "end=clean");
     sync();
     if (s_got_reboot) {
         vigil_log("rebooting");

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Fetch the Aegis kernel image LoricaOS is built against.
 #
-# Resolution order:
+# Resolution order (both paths are verified against tools/kernel.sha256):
 #   1. local cache  vendor/aegis[-arm64]-<version>.elf   (committed or pre-populated)
 #   2. download     <release URL>/v<version>/aegis[-arm64].elf
 #
@@ -11,6 +11,8 @@
 # The 3rd arg (or $ARCH) selects the arch: x86_64 (default) → aegis.elf,
 # arm64/aarch64 → aegis-arm64.elf. Each arch is a separate release artifact.
 set -eu
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"; cd "$ROOT"
 
 VER="${1:?usage: fetch-kernel.sh <version> <dest-path> [arch]}"
 DEST="${2:?usage: fetch-kernel.sh <version> <dest-path> [arch]}"
@@ -25,6 +27,15 @@ esac
 
 CACHE="vendor/aegis${SUFFIX}-${VER}.elf"
 URL="https://github.com/LoricaOS/Aegis/releases/download/v${VER}/aegis${SUFFIX}.elf"
+LOCK=tools/kernel.sha256
+ASSET="aegis${SUFFIX}.elf"
+EXPECTED="$(awk -v ver="$VER" -v asset="$ASSET" \
+    '$1 == ver && $2 == asset { print $3; exit }' "$LOCK")"
+
+if [ -z "$EXPECTED" ]; then
+    echo "[fetch-kernel] ERROR: no checksum for v$VER $ASSET in $LOCK" >&2
+    exit 1
+fi
 
 mkdir -p vendor "$(dirname "$DEST")"
 
@@ -41,6 +52,15 @@ else
     fi
     mv "$CACHE.tmp" "$CACHE"
 fi
+
+FOUND="$(sha256sum "$CACHE" | awk '{print $1}')"
+if [ "$FOUND" != "$EXPECTED" ]; then
+    echo "[fetch-kernel] ERROR: checksum mismatch for $CACHE" >&2
+    echo "[fetch-kernel] expected $EXPECTED" >&2
+    echo "[fetch-kernel] found    $FOUND" >&2
+    exit 1
+fi
+echo "[fetch-kernel] verified $ASSET v$VER"
 
 cp "$CACHE" "$DEST"
 echo "$VER" > "$(dirname "$DEST")/.kernel-version"

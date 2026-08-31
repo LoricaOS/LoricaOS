@@ -1,8 +1,11 @@
 /* copy.c — block device enumeration + rootfs/ESP copy (libinstall) */
 #include "libinstall.h"
 #include "syscalls.h"
+#include "ext2_grow.h"
+#include "cryptroot_crypto.h"
 #include <string.h>
 #include <stdio.h>
+#include <sys/random.h>
 
 /*
  * All logical block devices (ramdisk0, ramdisk1, partition devices via the
@@ -30,6 +33,58 @@ static void report_err(install_progress_t *p, const char *msg)
 {
     if (p && p->on_error)
         p->on_error(msg, p->ctx);
+}
+
+static int grow_io(void *ctx, uint64_t sector, uint64_t count,
+                   void *buf, int write)
+{
+    return (int)li_blkdev_io((const char *)ctx, sector, count, buf, write);
+}
+
+#define CRYPT_HEADER_SECTORS 8ULL
+#define CRYPT_PBKDF2_ROUNDS 100000U
+typedef struct { const char *dev; install_xts_ctx_t xts; } crypt_io_t;
+
+static int crypt_io(void *opaque,uint64_t sector,uint64_t count,void *buf,int write)
+{
+    crypt_io_t *c=opaque;unsigned char *p=buf;
+    if(write){
+        static unsigned char tmp[XFER_BYTES];
+        if(count>sizeof(tmp)/RAM_BLOCK_SIZE)return -1;
+        memcpy(tmp,buf,(size_t)(count*RAM_BLOCK_SIZE));
+        for(uint64_t i=0;i<count;i++)install_xts(&c->xts,tmp+i*RAM_BLOCK_SIZE,512,sector+i,1);
+        int rc=(int)li_blkdev_io(c->dev,sector+CRYPT_HEADER_SECTORS,count,tmp,1);
+        memset(tmp,0,(size_t)(count*RAM_BLOCK_SIZE));return rc;
+    }
+    if(li_blkdev_io(c->dev,sector+CRYPT_HEADER_SECTORS,count,buf,0)<0)return -1;
+    for(uint64_t i=0;i<count;i++)install_xts(&c->xts,p+i*RAM_BLOCK_SIZE,512,sector+i,0);
+    return 0;
+}
+
+static void put32(unsigned char *p,uint32_t v)
+{ p[0]=v;p[1]=v>>8;p[2]=v>>16;p[3]=v>>24; }
+
+static int crypt_setup(const char *dev,const char *password,crypt_io_t *out,install_progress_t *p)
+{
+    static unsigned char header[CRYPT_HEADER_SECTORS*RAM_BLOCK_SIZE];
+    unsigned char key[64];memset(header,0,sizeof(header));
+    memcpy(header,"LORICRY1",8);put32(header+8,1);put32(header+12,CRYPT_HEADER_SECTORS);put32(header+16,CRYPT_PBKDF2_ROUNDS);
+    if(getrandom(header+20,16,0)!=16){report_err(p,"secure random unavailable for encrypted root");return -1;}
+    install_pbkdf2((const unsigned char *)password,(uint32_t)strlen(password),header+20,CRYPT_PBKDF2_ROUNDS,key);
+    install_key_verifier(key,header+36);install_xts_init(&out->xts,key);out->dev=dev;memset(key,0,sizeof(key));
+    if(li_blkdev_io(dev,0,CRYPT_HEADER_SECTORS,header,1)<0){report_err(p,"encrypted-root header write failed");return -1;}
+    return 0;
+}
+
+static int crypt_copy_verify(crypt_io_t *crypt,uint64_t count,install_progress_t *p)
+{
+    static unsigned char plain[XFER_BYTES],check[XFER_BYTES];uint64_t done=0,max=XFER_BYTES/RAM_BLOCK_SIZE;
+    while(done<count){uint64_t n=count-done;if(n>max)n=max;
+        if(li_blkdev_io("ramdisk0",done,n,plain,0)<0||crypt_io(crypt,done,n,plain,1)<0){report_err(p,"encrypted root copy failed");return -1;}
+        if(crypt_io(crypt,done,n,check,0)<0||memcmp(plain,check,(size_t)(n*RAM_BLOCK_SIZE))){report_err(p,"encrypted root verification failed");return -1;}
+        done+=n;if(p&&p->on_progress)p->on_progress((int)(done*100/count),p->ctx);
+    }
+    memset(plain,0,sizeof(plain));memset(check,0,sizeof(check));return 0;
 }
 
 /*
@@ -291,7 +346,8 @@ int install_copy_esp(const char *devname, uint32_t block_size,
 /* ── Public: install_copy_rootfs ────────────────────────────────────── */
 
 int install_copy_rootfs(const char *dst_dev, uint64_t dst_blocks,
-                        uint32_t block_size, install_progress_t *p)
+                        uint32_t block_size, const char *password,
+                        install_progress_t *p)
 {
     (void)block_size; /* partition device presents 512B after 512e */
     if (p && p->on_step)
@@ -311,16 +367,38 @@ int install_copy_rootfs(const char *dst_dev, uint64_t dst_blocks,
         report_err(p, "ramdisk0 not found");
         return -1;
     }
-    if (src_blocks > dst_blocks) {
+    uint64_t usable_blocks=dst_blocks;
+    if(password&&password[0]){
+        if(dst_blocks<=CRYPT_HEADER_SECTORS){report_err(p,"target too small for encrypted root");return -1;}
+        usable_blocks-=CRYPT_HEADER_SECTORS;
+    }
+    if (src_blocks > usable_blocks) {
         report_err(p, "rootfs larger than target partition");
         return -1;
     }
 
-    /* dst_dev (nvme0p1) presents 512B logical sectors via 512e emulation */
-    if (copy_512b("ramdisk0", 0, dst_dev, 0, src_blocks, p) < 0)
-        return -1;
+    crypt_io_t crypt;
+    if(password&&password[0]){
+        if(p&&p->on_step)p->on_step("Encrypting root filesystem",p->ctx);
+        if(crypt_setup(dst_dev,password,&crypt,p)<0||crypt_copy_verify(&crypt,src_blocks,p)<0)return -1;
+    }else{
+        if(copy_512b("ramdisk0",0,dst_dev,0,src_blocks,p)<0)return -1;
+        if(p&&p->on_step)p->on_step("Verifying root filesystem",p->ctx);
+        if(verify_512b("ramdisk0",0,dst_dev,0,src_blocks,p)<0)return -1;
+    }
 
     if (p && p->on_step)
-        p->on_step("Verifying root filesystem", p->ctx);
-    return verify_512b("ramdisk0", 0, dst_dev, 0, src_blocks, p);
+        p->on_step("Expanding root filesystem", p->ctx);
+    const char *grow_error = NULL;
+    uint64_t grown_sectors = 0;
+    ext2_grow_io_fn io=(password&&password[0])?crypt_io:grow_io;
+    void *io_ctx=(password&&password[0])?(void *)&crypt:(void *)dst_dev;
+    if (ext2_grow(io, io_ctx, usable_blocks,
+                  &grown_sectors, &grow_error) < 0) {
+        report_err(p, grow_error ? grow_error : "root filesystem expansion failed");
+        return -1;
+    }
+    (void)grown_sectors;
+    if (p && p->on_progress) p->on_progress(100, p->ctx);
+    return 0;
 }

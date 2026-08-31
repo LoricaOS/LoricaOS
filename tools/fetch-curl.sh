@@ -4,7 +4,7 @@
 # as /bin/curl (used by herald's online repository client). Release tarballs
 # ship a pre-generated ./configure, so no autotools regen is needed.
 set -e
-REPO="$(git rev-parse --show-toplevel)"
+REPO="${REPO:-$(cd "$(dirname "$0")/.." && pwd)}"
 VER="${CURL_VERSION:-8.5.0}"
 URL="https://curl.se/download/curl-${VER}.tar.gz"
 TMP="/tmp/curl-${VER}.tar.gz"

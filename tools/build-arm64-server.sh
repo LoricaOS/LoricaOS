@@ -203,7 +203,7 @@ log "rootfs has $(ls "$STAGE/bin" | wc -l | tr -d ' ') binaries in /bin"
 #    (ramdisk root), matching the arm64 kernel's boot path.
 log "== ext2 image =="
 rm -f "$OUT_EXT2"
-/sbin/mke2fs -q -t ext2 -b 4096 -d "$STAGE" -L aegis-arm64 "$OUT_EXT2" 64M
+/sbin/mke2fs -q -t ext2 -b 4096 -i 32768 -d "$STAGE" -L aegis-arm64 "$OUT_EXT2" 64M
 log "rootfs.ext2: $(stat -c%s "$OUT_EXT2") bytes"
 
 # 6. UEFI ISO: kernel + rootfs-as-module, booted via Limine (aarch64).

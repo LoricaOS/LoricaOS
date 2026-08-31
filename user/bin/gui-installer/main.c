@@ -65,6 +65,7 @@ typedef struct {
      * the account password doubles as the elevation credential. */
     char admin_new_pw[64];
     char admin_new_confirm[64];
+    int  encrypt_root;
     char validation_error[128];
 
     /* Hashes (computed at confirm time). admin_hash stays "" when no
@@ -91,9 +92,10 @@ static wizard_state_t g_st;
  * so we don't re-run it on redraws. */
 static int s_install_started = 0;
 
-/* Screen 3 focus state. 0-4 = the five fields (username, password, confirm,
- * admin password, admin confirm), 5 = the Next button. */
+/* Screen 3 focus: five fields, encrypted-root toggle, Next. */
 #define USER_NFIELDS 5
+#define USER_ENCRYPT_FOCUS USER_NFIELDS
+#define USER_NEXT_FOCUS (USER_NFIELDS + 1)
 static int s_user_focus = 0;
 
 /* ── Signal handling ────────────────────────────────────────────────── */
@@ -397,10 +399,15 @@ static void draw_screen_user(void)
         }
     }
 
+    int ey=fy+USER_NFIELDS*(field_h+gap+18);
+    draw_rect(&g_st.surf,fx,ey,18,18,s_user_focus==USER_ENCRYPT_FOCUS?0x004488CC:0x00808090);
+    if(g_st.encrypt_root)draw_text14(fx+3,ey-1,"x",0x00FFFFFF);
+    draw_text14(fx+28,ey,"Encrypt root filesystem (account password at boot)",0x00FFFFFF);
+
     /* Back + Next buttons */
     draw_button(cx - 160, g_st.fb_h - 120, 100, 40, "Back", 0);
     draw_button(cx + 60, g_st.fb_h - 120, 100, 40, "Next",
-                (s_user_focus == USER_NFIELDS));
+                (s_user_focus == USER_NEXT_FOCUS));
 
     /* Validation error message */
     if (g_st.validation_error[0]) {
@@ -449,6 +456,9 @@ static void draw_screen_confirm(void)
     draw_text14(lx + 180, y,
                 g_st.admin_new_pw[0] ? "separate" : "same as account",
                 0x00FFFFFF);
+    y += 30;
+    draw_text14(lx,y,"Root filesystem:",0x00A0A0B0);
+    draw_text14(lx+180,y,g_st.encrypt_root?"AES-256-XTS encrypted":"not encrypted",0x00FFFFFF);
     y += 60;
 
     /* If the selected disk already has an LoricaOS install, make the
@@ -551,8 +561,11 @@ static void run_install(void)
         wipe_secrets();
         return;
     }
-    /* Cleartext no longer needed — the hashes carry the rest of the install. */
-    wipe_secrets();
+    /* Keep only the account password until encrypted-root setup consumes it. */
+    memset(g_st.user_pw_confirm,0,sizeof(g_st.user_pw_confirm));
+    memset(g_st.admin_new_pw,0,sizeof(g_st.admin_new_pw));
+    memset(g_st.admin_new_confirm,0,sizeof(g_st.admin_new_confirm));
+    memset(g_st.admin_pw,0,sizeof(g_st.admin_pw));
 
     install_progress_t p = {
         .on_step     = prog_on_step,
@@ -568,7 +581,10 @@ static void run_install(void)
         g_st.username,
         g_st.user_hash,
         g_st.admin_hash,
+        g_st.encrypt_root ? g_st.user_pw : NULL,
         &p);
+
+    wipe_secrets();
 
     if (rc == 0) {
         g_st.install_done = 1;
@@ -714,7 +730,7 @@ static void handle_key_user(char c)
 
     if (c == '\t') {
         /* Tab cycles focus over the fields then the Next button. */
-        s_user_focus = (s_user_focus + 1) % (USER_NFIELDS + 1);
+        s_user_focus = (s_user_focus + 1) % (USER_NFIELDS + 2);
         g_st.dirty = 1;
         return;
     }
@@ -724,6 +740,7 @@ static void handle_key_user(char c)
             g_st.dirty = 1;
             return;
         }
+        if(s_user_focus==USER_ENCRYPT_FOCUS){g_st.encrypt_root=!g_st.encrypt_root;s_user_focus=USER_NEXT_FOCUS;g_st.dirty=1;return;}
         /* Focus was on Next — validate and advance. */
         if (screen_user_validate() == 0) {
             g_st.validation_error[0] = '\0';
@@ -733,6 +750,7 @@ static void handle_key_user(char c)
         g_st.dirty = 1;
         return;
     }
+    if(s_user_focus==USER_ENCRYPT_FOCUS&&c==' '){g_st.encrypt_root=!g_st.encrypt_root;g_st.dirty=1;return;}
     if (s_user_focus >= USER_NFIELDS) return;
 
     user_field_t *f = &user_fields[s_user_focus];
@@ -856,6 +874,10 @@ static void handle_back(void)
 static void handle_mouse_click(int x, int y)
 {
     int cx     = g_st.fb_w / 2;
+    if(g_st.screen==SCREEN_USER){
+        int ey=104+USER_NFIELDS*(32+10+18),fx=cx-220;
+        if(x>=fx&&x<fx+440&&y>=ey-4&&y<ey+24){g_st.encrypt_root=!g_st.encrypt_root;g_st.dirty=1;return;}
+    }
     int btn_y  = g_st.fb_h - 120;
     int btn_h  = 40;
     int btn_w  = 100;
@@ -912,6 +934,7 @@ main(int argc, char **argv)
     g_st.screen = SCREEN_WELCOME;
     g_st.dirty = 1;
     g_st.selected_disk = -1;
+    g_st.encrypt_root = 1;
 
     /* Paint first frame and emit readiness marker. */
     render_current_screen();

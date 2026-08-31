@@ -11,6 +11,7 @@
  *
  * Usage:
  *   herald install <file.hpkg>     verify, extract, register
+ *   herald upgrade [id]            upgrade one or all installed packages
  *   herald verify  <file.hpkg>     signature check only (no install)
  *   herald info    <file.hpkg|id>  print a package's manifest / installed info
  *   herald list                    list installed packages
@@ -32,12 +33,15 @@
 #include "db.h"
 #include "net.h"
 #include "repo.h"
+#include "transaction.h"
 #include "trusted_key.h"   /* static const unsigned char herald_trusted_key[65] */
 
 #define HERALD_CACHE_DIR "/var/lib/herald/cache"
 #define HERALD_MAX_INSTALL 64
 #define HERALD_ANCHORS_FILE "/etc/aegis/anchors"
 #define SYS_INSTALL_COMMIT 516   /* kernel: reload cap policy + anchors, no reboot */
+
+static const char *staged_db = HERALD_TXN_STAGE "/var/lib/herald/db";
 
 /* ---- helpers ---------------------------------------------------------- */
 
@@ -225,7 +229,7 @@ static void mkdir_p(const char *path)
  * invariant for an engine library (e.g. /lib/ladybird) shipped outside /apps.
  * `relprefix` is a relative dir like "lib/ladybird/"; it is normalized to an
  * absolute path with no trailing slash ("/lib/ladybird"). */
-static void anchor_register(const char *relprefix)
+static int anchor_register(const char *relprefix)
 {
     char abspath[128];
     char line[160];
@@ -235,13 +239,13 @@ static void anchor_register(const char *relprefix)
     while (n > 0 && relprefix[n - 1] == '/')
         n--;
     if (n == 0 || n + 1 >= sizeof(abspath))
-        return;
+        return -1;
     abspath[0] = '/';
     memcpy(abspath + 1, relprefix, n);
     abspath[n + 1] = '\0';
 
     /* Dedup: skip if the exact path is already an anchor. */
-    f = fopen(HERALD_ANCHORS_FILE, "r");
+    f = fopen(HERALD_TXN_STAGE HERALD_ANCHORS_FILE, "r");
     if (f) {
         while (fgets(line, sizeof(line), f)) {
             size_t l = strlen(line);
@@ -250,21 +254,83 @@ static void anchor_register(const char *relprefix)
                 line[--l] = '\0';
             if (strcmp(line, abspath) == 0) {
                 fclose(f);
-                return;
+                return 0;
             }
         }
         fclose(f);
     }
 
-    f = fopen(HERALD_ANCHORS_FILE, "a");
+    f = fopen(HERALD_TXN_STAGE HERALD_ANCHORS_FILE, "a");
     if (!f) {
         fprintf(stderr, "herald: warning: could not register anchor %s: %s\n",
                 abspath, strerror(errno));
-        return;
+        return -1;
     }
     fprintf(f, "%s\n", abspath);
     fclose(f);
     printf("registered trusted-path anchor %s\n", abspath);
+    return 0;
+}
+
+static int transaction_begin(void)
+{
+    if (txn_begin() != 0 || txn_stage_existing("etc/aegis/anchors") != 0) {
+        fprintf(stderr, "herald: cannot start update transaction\n");
+        txn_abort();
+        return -1;
+    }
+    mkdir_p(HERALD_TXN_STAGE "/etc/aegis/caps.d");
+    db_set_path(staged_db);
+    return 0;
+}
+
+static int transaction_finish(int ok)
+{
+    int rc = -1;
+    if (ok && txn_commit() == 0) rc = 0;
+    else txn_abort();
+    db_set_path(NULL);
+    if (rc != 0) {
+        fprintf(stderr, "herald: update transaction rolled back\n");
+        return -1;
+    }
+    if (syscall(SYS_INSTALL_COMMIT) != 0)
+        fprintf(stderr, "herald: warning: kernel policy reload failed — new "
+                        "caps/anchors take effect on next boot\n");
+    else
+        printf("kernel cap policy + anchors reloaded\n");
+    return 0;
+}
+
+static int owner_finish(int fd, const char *id)
+{
+    char rel[160], path[768];
+    int failed;
+    if (fd < 0) return -1;
+    failed = fsync(fd) != 0;
+    if (close(fd) != 0) failed = 1;
+    if (failed ||
+        snprintf(rel, sizeof(rel), "var/lib/herald/owners/%s.list", id) >=
+            (int)sizeof(rel) || txn_stage_path(path, sizeof(path), rel) != 0)
+        return -1;
+    return txn_remove_stale(id, path);
+}
+
+static int staged_policy_path(char *out, size_t size, const char *name)
+{
+    char rel[256];
+    if (snprintf(rel, sizeof(rel), "etc/aegis/caps.d/%s", name) >= (int)sizeof(rel))
+        return -1;
+    return txn_stage_path(out, size, rel);
+}
+
+static int policy_exists(const char *name)
+{
+    char live[256], staged[768];
+    snprintf(live, sizeof(live), "/etc/aegis/caps.d/%s", name);
+    return access(live, F_OK) == 0 ||
+           (staged_policy_path(staged, sizeof(staged), name) == 0 &&
+            access(staged, F_OK) == 0);
 }
 
 /* ---- commands --------------------------------------------------------- */
@@ -356,9 +422,10 @@ static int install_bytes(const unsigned char *buf, size_t len)
     const unsigned char *md;
     size_t ms;
     const char *err = NULL;
-    char prefix[80], badcap[64], cp[256], hex[65];
+    char prefix[80], badcap[64], cp[768], hex[65];
     unsigned char dg[32];
     herald_db_entry_t e;
+    int owner_fd;
 
     if (tar_find_mem(buf, len, "manifest", &md, &ms) != 1) {
         fprintf(stderr, "herald: package has no manifest\n");
@@ -404,8 +471,14 @@ static int install_bytes(const unsigned char *buf, size_t len)
      * caps.d files take effect on the commit below; no anchor_register is needed
      * because the stack grants caps only under the builtin anchors /bin + /apps. */
     if (m.is_system) {
+        owner_fd = txn_owner_open(m.id);
+        if (owner_fd < 0) {
+            fprintf(stderr, "herald: cannot create package file list\n");
+            return -1;
+        }
         err = NULL;
-        if (tar_extract_mem(buf, len, "/", NULL, &err) != 0) {
+        if (tar_extract_mem_owned(buf, len, HERALD_TXN_STAGE, NULL,
+                                  owner_fd, &err) != 0) {
             if (errno == EPERM || errno == EACCES)
                 fprintf(stderr, "herald: install denied — installing a system "
                                 "package requires an authenticated admin "
@@ -413,6 +486,7 @@ static int install_bytes(const unsigned char *buf, size_t len)
             else
                 fprintf(stderr, "herald: install failed: %s\n",
                         err ? err : "extraction error");
+            close(owner_fd);
             return -1;
         }
 
@@ -423,15 +497,10 @@ static int install_bytes(const unsigned char *buf, size_t len)
         strncpy(e.version, m.version, sizeof(e.version) - 1);
         strncpy(e.exec, m.exec, sizeof(e.exec) - 1);   /* "" for system pkgs */
         strncpy(e.sha256, hex, sizeof(e.sha256) - 1);
-        if (db_put(&e) != 0)
-            fprintf(stderr, "herald: warning: installed but failed to record "
-                            "in database\n");
-
-        if (syscall(SYS_INSTALL_COMMIT) != 0)
-            fprintf(stderr, "herald: warning: kernel policy reload failed — new "
-                            "caps take effect on next boot\n");
-        else
-            printf("kernel cap policy + anchors reloaded\n");
+        if (owner_finish(owner_fd, m.id) != 0 || db_put(&e) != 0) {
+            fprintf(stderr, "herald: failed to stage package database\n");
+            return -1;
+        }
 
         printf("installed system package %s %s\n", m.id, m.version);
         return 0;
@@ -478,7 +547,7 @@ static int install_bytes(const unsigned char *buf, size_t len)
     if (m.caps[0]) {
         herald_db_entry_t prev;
         snprintf(cp, sizeof(cp), "/etc/aegis/caps.d/%s", m.exec);
-        if (access(cp, F_OK) == 0 && db_find(m.id, &prev) != 1) {
+        if (policy_exists(m.exec) && db_find(m.id, &prev) != 1) {
             fprintf(stderr, "herald: refusing %s: cap policy %s already exists "
                             "and is not owned by this package\n", m.id, cp);
             return -1;
@@ -511,7 +580,7 @@ static int install_bytes(const unsigned char *buf, size_t len)
                 return -1;
             }
             snprintf(cp, sizeof(cp), "/etc/aegis/caps.d/%s", bc->binary);
-            if (access(cp, F_OK) == 0 && !reinstall) {
+            if (policy_exists(bc->binary) && !reinstall) {
                 fprintf(stderr, "herald: refusing %s: cap policy %s already "
                                 "exists and is not owned by this package\n",
                         m.id, cp);
@@ -558,8 +627,14 @@ static int install_bytes(const unsigned char *buf, size_t len)
             prefixes[np++] = tok;
         }
         prefixes[np] = NULL;
+        owner_fd = txn_owner_open(m.id);
+        if (owner_fd < 0) {
+            fprintf(stderr, "herald: cannot create package file list\n");
+            return -1;
+        }
         err = NULL;
-        if (tar_extract_mem(buf, len, "/", prefixes, &err) != 0) {
+        if (tar_extract_mem_owned(buf, len, HERALD_TXN_STAGE, prefixes,
+                                  owner_fd, &err) != 0) {
             if (errno == EPERM || errno == EACCES) {
                 fprintf(stderr, "herald: install denied — modifying the system "
                                 "app tree requires an authenticated admin "
@@ -568,6 +643,7 @@ static int install_bytes(const unsigned char *buf, size_t len)
                 fprintf(stderr, "herald: install failed: %s\n",
                         err ? err : "extraction error");
             }
+            close(owner_fd);
             return -1;
         }
 
@@ -579,21 +655,33 @@ static int install_bytes(const unsigned char *buf, size_t len)
             for (pi = 0; prefixes[pi]; pi++) {
                 if (strncmp(prefixes[pi], "apps/", 5) == 0)
                     continue;
-                anchor_register(prefixes[pi]);
+                if (anchor_register(prefixes[pi]) != 0) {
+                    close(owner_fd);
+                    return -1;
+                }
             }
         }
     }
 
     if (m.caps[0]) {
         FILE *cf;
-        snprintf(cp, sizeof(cp), "/etc/aegis/caps.d/%s", m.exec);
+        if (staged_policy_path(cp, sizeof(cp), m.exec) != 0) {
+            close(owner_fd);
+            return -1;
+        }
         cf = fopen(cp, "w");
         if (cf == NULL) {
-            fprintf(stderr, "herald: warning: could not write cap policy %s: %s\n",
+            fprintf(stderr, "herald: could not write cap policy %s: %s\n",
                     cp, strerror(errno));
+            close(owner_fd);
+            return -1;
         } else {
             fprintf(cf, "service %s\n", m.caps);
-            fclose(cf);
+            if (fclose(cf) != 0 || txn_owner_add(owner_fd,
+                    cp + strlen(HERALD_TXN_STAGE) + 1) != 0) {
+                close(owner_fd);
+                return -1;
+            }
         }
     }
 
@@ -602,14 +690,23 @@ static int install_bytes(const unsigned char *buf, size_t len)
         int bi;
         for (bi = 0; bi < m.nbincaps; bi++) {
             FILE *bcf;
-            snprintf(cp, sizeof(cp), "/etc/aegis/caps.d/%s", m.bincaps[bi].binary);
+            if (staged_policy_path(cp, sizeof(cp), m.bincaps[bi].binary) != 0) {
+                close(owner_fd);
+                return -1;
+            }
             bcf = fopen(cp, "w");
             if (bcf == NULL) {
-                fprintf(stderr, "herald: warning: could not write cap policy "
+                fprintf(stderr, "herald: could not write cap policy "
                                 "%s: %s\n", cp, strerror(errno));
+                close(owner_fd);
+                return -1;
             } else {
                 fprintf(bcf, "service %s\n", m.bincaps[bi].caps);
-                fclose(bcf);
+                if (fclose(bcf) != 0 || txn_owner_add(owner_fd,
+                        cp + strlen(HERALD_TXN_STAGE) + 1) != 0) {
+                    close(owner_fd);
+                    return -1;
+                }
             }
         }
     }
@@ -621,17 +718,9 @@ static int install_bytes(const unsigned char *buf, size_t len)
     strncpy(e.version, m.version, sizeof(e.version) - 1);
     strncpy(e.exec, m.exec, sizeof(e.exec) - 1);
     strncpy(e.sha256, hex, sizeof(e.sha256) - 1);
-    if (db_put(&e) != 0) {
-        fprintf(stderr, "herald: warning: installed but failed to record in database\n");
-    }
-
-    /* Reload kernel cap policy + trusted-path anchors so the caps.d files and
-     * anchors written above take effect immediately, with no reboot. */
-    if (syscall(SYS_INSTALL_COMMIT) != 0) {
-        fprintf(stderr, "herald: warning: kernel policy reload failed — new "
-                        "caps/anchors take effect on next boot\n");
-    } else {
-        printf("kernel cap policy + anchors reloaded\n");
+    if (owner_finish(owner_fd, m.id) != 0 || db_put(&e) != 0) {
+        fprintf(stderr, "herald: failed to stage package database\n");
+        return -1;
     }
 
     printf("installed %s %s -> /apps/%s\n", m.id, m.version, m.id);
@@ -680,7 +769,13 @@ static int cmd_install(const char *path)
     if (load_verified_pkg(path, &buf, &len, &m) != 0) {
         return 1;
     }
+    if (transaction_begin() != 0) {
+        free(buf);
+        return 1;
+    }
     r = install_bytes(buf, len);
+    if (transaction_finish(r == 0) != 0)
+        r = -1;
     /* On success, flag any prerequisites the user still needs (only the ones
      * not already installed). Advisory — a local install can't fetch them. */
     if (r == 0)
@@ -706,15 +801,22 @@ static int cmd_search(const char *term)
     return repo_search(term) < 0 ? 1 : 0;
 }
 
-/* Build the install set for `name`, deps first, skipping already-installed and
- * already-queued packages. Recursive. Returns 0 on success, -1 on error. */
-static int resolve(const char *name, herald_stanza_t *set, int *count, int max)
+/* Build the install set for `name`, deps first. In upgrade mode an installed
+ * package is queued only when the signed repository offers a newer version. */
+static int resolve(const char *name, herald_stanza_t *set, int *count, int max,
+                   int upgrade)
 {
     herald_db_entry_t de;
     herald_stanza_t st;
-    int i, f;
+    int i, f, installed, slot;
 
-    if (db_find(name, &de) == 1) {
+    if (!manifest_is_bare_name(name)) {
+        fprintf(stderr, "herald: invalid package name '%s'\n", name);
+        return -1;
+    }
+
+    installed = (db_find(name, &de) == 1);
+    if (!upgrade && installed) {
         return 0;   /* already installed — dependency satisfied */
     }
     for (i = 0; i < *count; i++) {
@@ -728,25 +830,37 @@ static int resolve(const char *name, herald_stanza_t *set, int *count, int max)
         return -1;
     }
     if (f == 0) {
+        if (installed)
+            return 0;   /* locally installed package, not managed by this repo */
         fprintf(stderr, "herald: package '%s' not found in any repository\n", name);
         return -1;
     }
-    if (st.depends[0]) {
-        char deps[256], *save = NULL, *tok;
-        strncpy(deps, st.depends, sizeof(deps) - 1);
-        deps[sizeof(deps) - 1] = '\0';
-        for (tok = strtok_r(deps, " ", &save); tok; tok = strtok_r(NULL, " ", &save)) {
-            if (resolve(tok, set, count, max) != 0) {
-                return -1;
-            }
-        }
+    if (installed && !herald_version_gt(st.version, de.version)) {
+        return 0;   /* current repository has no upgrade */
     }
     if (*count >= max) {
         fprintf(stderr, "herald: dependency set too large\n");
         return -1;
     }
-    set[*count] = st;
-    (*count)++;
+    /* Mark it queued before recursion so a malformed signed dependency cycle
+     * terminates. Move it behind its dependencies once they are resolved. */
+    slot = (*count)++;
+    set[slot] = st;
+    if (st.depends[0]) {
+        char deps[256], *save = NULL, *tok;
+        strncpy(deps, st.depends, sizeof(deps) - 1);
+        deps[sizeof(deps) - 1] = '\0';
+        for (tok = strtok_r(deps, " ", &save); tok; tok = strtok_r(NULL, " ", &save)) {
+            if (resolve(tok, set, count, max, upgrade) != 0) {
+                return -1;
+            }
+        }
+    }
+    if (slot != *count - 1) {
+        for (i = slot; i < *count - 1; i++)
+            set[i] = set[i + 1];
+        set[*count - 1] = st;
+    }
     return 0;
 }
 
@@ -754,24 +868,11 @@ static int resolve(const char *name, herald_stanza_t *set, int *count, int max)
  * resolve the set, download each, verify each against the SHA-256 pinned by the
  * signed Release->Packages chain (no per-package signature needed), and install
  * deps first. */
-static int cmd_install_named(const char *name)
+static int apply_set(herald_stanza_t *set, int count)
 {
-    static herald_stanza_t set[HERALD_MAX_INSTALL];
-    int count = 0, i;
-
-    if (strchr(name, '/') != NULL) {
-        fprintf(stderr, "herald: invalid package name\n");
-        return 1;
-    }
-    if (resolve(name, set, &count, HERALD_MAX_INSTALL) != 0) {
-        return 1;
-    }
-    if (count == 0) {
-        printf("%s is already installed\n", name);
-        return 0;
-    }
+    int i;
     if (count > 1) {
-        printf("installing %d packages:", count);
+        printf("applying %d packages:", count);
         for (i = 0; i < count; i++) {
             printf(" %s", set[i].name);
         }
@@ -779,6 +880,9 @@ static int cmd_install_named(const char *name)
     }
 
     mkdir_p(HERALD_CACHE_DIR);
+    /* Fetch and authenticate the entire transaction before changing /. A bad
+     * or unavailable later package therefore cannot leave a half-applied
+     * system upgrade. Cached files are read again during the apply pass. */
     for (i = 0; i < count; i++) {
         herald_stanza_t *st = &set[i];
         char url[800], cache[256], hex[65];
@@ -803,19 +907,99 @@ static int cmd_install_named(const char *name)
             free(pb);
             return 1;
         }
+        free(pb);
+    }
+    if (transaction_begin() != 0)
+        return 1;
+    for (i = 0; i < count; i++) {
+        char cache[256];
+        char hex[65];
+        unsigned char *pb = NULL, dg[32];
+        size_t pl;
+        snprintf(cache, sizeof(cache), "%s/%s.hpkg",
+                 HERALD_CACHE_DIR, set[i].name);
+        if (read_file(cache, &pb, &pl) != 0) {
+            free(pb);
+            transaction_finish(0);
+            return 1;
+        }
+        herald_sha256(pb, pl, dg);
+        hex32(dg, hex);
+        if (strcmp(hex, set[i].sha256) != 0) {
+            fprintf(stderr, "herald: cached %s changed after verification — refusing\n",
+                    set[i].name);
+            free(pb);
+            transaction_finish(0);
+            return 1;
+        }
         if (install_bytes(pb, pl) != 0) {
             free(pb);
+            transaction_finish(0);
             return 1;
         }
         free(pb);
     }
-    return 0;
+    return transaction_finish(1) == 0 ? 0 : 1;
+}
+
+static int cmd_install_named(const char *name)
+{
+    static herald_stanza_t set[HERALD_MAX_INSTALL];
+    int count = 0;
+
+    if (!manifest_is_bare_name(name)) {
+        fprintf(stderr, "herald: invalid package name\n");
+        return 1;
+    }
+    if (resolve(name, set, &count, HERALD_MAX_INSTALL, 0) != 0)
+        return 1;
+    if (count == 0) {
+        printf("%s is already installed\n", name);
+        return 0;
+    }
+    return apply_set(set, count);
+}
+
+static int cmd_upgrade(const char *name)
+{
+    static herald_stanza_t set[HERALD_MAX_INSTALL];
+    static herald_db_entry_t installed[256];
+    int count = 0, n, i;
+
+    if (name) {
+        if (!manifest_is_bare_name(name)) {
+            fprintf(stderr, "herald: invalid package name\n");
+            return 1;
+        }
+        if (db_find(name, &installed[0]) != 1) {
+            fprintf(stderr, "herald: %s is not installed\n", name);
+            return 1;
+        }
+        if (resolve(name, set, &count, HERALD_MAX_INSTALL, 1) != 0)
+            return 1;
+    } else {
+        n = db_read(installed, 256);
+        if (n < 0) {
+            fprintf(stderr, "herald: database error\n");
+            return 1;
+        }
+        for (i = 0; i < n; i++) {
+            if (resolve(installed[i].id, set, &count,
+                        HERALD_MAX_INSTALL, 1) != 0)
+                return 1;
+        }
+    }
+    if (count == 0) {
+        printf("all packages are up to date\n");
+        return 0;
+    }
+    return apply_set(set, count);
 }
 
 static int cmd_remove(const char *id)
 {
     herald_db_entry_t e;
-    char p[256];
+    char p[256], owner[256];
     int f;
 
     if (!manifest_is_bare_name(id)) {
@@ -846,6 +1030,17 @@ static int cmd_remove(const char *id)
         return 1;
     }
 
+    snprintf(owner, sizeof(owner), "/var/lib/herald/owners/%s.list", id);
+    if (access(owner, F_OK) == 0) {
+        if (transaction_begin() != 0)
+            return 1;
+        if (txn_remove_owned(id) != 0 || db_remove(id) != 0 ||
+            transaction_finish(1) != 0)
+            return 1;
+        printf("removed %s\n", id);
+        return 0;
+    }
+
     snprintf(p, sizeof(p), "/apps/%s/%s", id, e.exec);
     unlink(p);
     snprintf(p, sizeof(p), "/apps/%s/app.ini", id);
@@ -872,16 +1067,36 @@ static void usage(void)
         "  herald search <term>           search the synced package lists\n"
         "  herald install <name>          install from a repository (with deps)\n"
         "  herald install <file.hpkg>     install a local package file\n"
+        "  herald upgrade [name]          upgrade one or all installed packages\n"
         "  herald verify  <file.hpkg>     check a package's signature only\n"
         "  herald info    <file.hpkg|id>  show package / installed info\n"
         "  herald list                    list installed packages\n"
         "  herald remove  <id>            uninstall a package\n"
+        "  herald recover <complete|rollback> finish an interrupted system update\n"
         "\n"
         "sources are configured in " HERALD_SOURCES " (lines: <url> <suite> <component>)\n");
 }
 
 int main(int argc, char **argv)
 {
+    int recovery = txn_recover();
+    if (recovery == 1 && argc == 3 && strcmp(argv[1], "recover") == 0) {
+        int rc = strcmp(argv[2], "complete") == 0 ? txn_finalize() :
+                 strcmp(argv[2], "rollback") == 0 ? txn_rollback() : -1;
+        if (rc != 0) {
+            fprintf(stderr, "herald: update recovery failed\n");
+            return 1;
+        }
+        if (strcmp(argv[2], "rollback") == 0)
+            syscall(SYS_INSTALL_COMMIT);
+        printf("system update %s\n", argv[2]);
+        return 0;
+    }
+    if (recovery != 0) {
+        fprintf(stderr, "herald: system update is awaiting its kernel; run "
+                        "lorica-update, or 'herald recover rollback'\n");
+        return 1;
+    }
     if (argc < 2) {
         usage();
         return 2;
@@ -891,6 +1106,9 @@ int main(int argc, char **argv)
     }
     if (strcmp(argv[1], "sync") == 0) {
         return cmd_sync();
+    }
+    if (strcmp(argv[1], "upgrade") == 0) {
+        return cmd_upgrade(argc >= 3 ? argv[2] : NULL);
     }
     if (argc < 3) {
         usage();

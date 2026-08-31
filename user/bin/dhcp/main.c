@@ -405,21 +405,20 @@ main(void)
 
     /* Read MAC via sys_netcfg op=1 — if MAC is all zeros, no NIC present */
     netcfg_info_t info;
-    memset(&info, 0, sizeof(info));
-    (void)syscall(SYS_NETCFG, 1, (long)&info, 0, 0);
-    memcpy(s_mac, info.mac, 6);
-
-    /* Check if we have a real NIC (non-zero MAC) */
-    if (s_mac[0] == 0 && s_mac[1] == 0 && s_mac[2] == 0 &&
-        s_mac[3] == 0 && s_mac[4] == 0 && s_mac[5] == 0) {
-        dprintf(2, "[DHCP] no network interface (MAC 00:00:00:00:00:00), exiting\n");
-        return 0;
-    }
+    do {
+        memset(&info, 0, sizeof(info));
+        (void)syscall(SYS_NETCFG, 1, (long)&info, 0, 0);
+        memcpy(s_mac, info.mac, 6);
+        if (s_mac[0] || s_mac[1] || s_mac[2] ||
+            s_mac[3] || s_mac[4] || s_mac[5])
+            break;
+        sleep(4);
+    } while (1);
 
     int attempt;
-    for (attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    for (attempt = 0;; attempt++) {
         if (attempt > 0) {
-            int delay = s_backoff[attempt - 1];
+            int delay = s_backoff[attempt < MAX_ATTEMPTS ? attempt - 1 : MAX_ATTEMPTS - 1];
             dprintf(2, "[DHCP] retry %d, waiting %ds\n", attempt, delay);
             sleep((unsigned int)delay);
         }
@@ -452,6 +451,4 @@ main(void)
     next_attempt:;
     }
 
-    dprintf(2, "[DHCP] failed after %d attempts, exiting\n", MAX_ATTEMPTS);
-    return 1;
 }

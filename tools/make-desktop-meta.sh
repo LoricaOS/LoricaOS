@@ -26,6 +26,12 @@ OUT=build/pkgs
 [ -f "$HERALD_KEY" ] || { echo "make-desktop-meta: signing key $HERALD_KEY not found" >&2; exit 1; }
 mkdir -p "$OUT"
 
+# The server base already carries this record; the assembled desktop replaces
+# its db with the overlay db, so retain the system-release record there too.
+if ! grep -q '^loricaos-release	' "$DB" 2>/dev/null; then
+    printf 'loricaos-release\t%s\t\tbuilt-in\n' "$VERSION" >> "$DB"
+fi
+
 deps="$(grep -vE '^\s*#|^\s*$' "$LIST" | awk '{print $1}' | tr '\n' ' ' | sed 's/ *$//')"
 
 stage="$(mktemp -d)"; trap 'rm -rf "$stage"' EXIT

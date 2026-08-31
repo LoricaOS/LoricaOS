@@ -6,7 +6,7 @@
 # SUFFIX=-arm64 → build/curl-arm64/curl). herald forks /bin/curl for network.
 set -e
 
-REPO="${REPO:-$(git rev-parse --show-toplevel)}"
+REPO="${REPO:-$(cd "$(dirname "$0")/.." && pwd)}"
 CC="${CC:-musl-gcc}"
 HOST="${HOST:-x86_64-linux-musl}"
 STRIP="${STRIP:-strip}"

@@ -61,6 +61,11 @@ for r in lumen bastion citadel-dock $APPS; do
         for f in "$R/$r.hpkg"; do [ -f "$f" ] && { cp "$f" "$OUT/"; [ -f "$f.sig" ] && cp "$f.sig" "$OUT/"; n=$((n+1)); }; done
     else log "SKIP $r (pack failed; /tmp/x86pack-$r.log)"; fi
 done
+# The OS/kernel manifest is a first-class repository package too; without it
+# `lorica-update` could update components but never stage the next kernel.
+( cd "$REPO" && HERALD_KEY="$KEY" make update-package >/dev/null )
+release_pkg="$REPO/build/pkgs/loricaos-release_$(cat "$REPO/VERSION")_x86_64.hpkg"
+cp "$release_pkg" "$release_pkg.sig" "$OUT/"; n=$((n+1))
 log "x86 .hpkg built: $n"; ls "$OUT"/*.hpkg 2>/dev/null | sed 's|.*/||' | sort
 
 # 4. Optionally publish into a Chancery repo.

@@ -25,4 +25,7 @@ int db_remove(const char *id);
 
 /* Find by id: 1 found (fills *out), 0 not found, negative error. */
 int db_find(const char *id, herald_db_entry_t *out);
+
+/* Direct database I/O at a transaction-staged copy; NULL restores default. */
+void db_set_path(const char *path);
 #endif

@@ -1,0 +1,4 @@
+# version  release asset       sha256
+1.5.1      aegis.elf           39b4d847308d308cfcc596dffeeeac72d023f5303ee56bbfc91f35c129208580
+1.5.1      aegis-arm64.elf     3449afe5f680b99451ea9b8f024883eae50638b9e3578a62b525d501b957d6f6
+1.4.1      aegis-microvm.elf   3fdb00f7fa3f77ca26d3afee6649ba3773b5c41caea72593d2361c14a8e3c9f6

@@ -30,17 +30,17 @@ ROOTFS_SERVER  = $(BUILD)/rootfs-server.img
 CXX_AEGIS       = /opt/aegis-cxx/bin/x86_64-buildroot-linux-musl-g++
 CXX_FLAGS_AEGIS = -static -O2 -std=c++23 -fno-pie -no-pie
 
-.PHONY: all iso desktop-iso desktop-dev-iso server-iso selftest-iso soak-iso ffsmoke-iso ffsmoke-test microvm-image rootfs build-musl test clean version curl_bin
+.PHONY: all iso desktop-iso desktop-dev-iso server-iso selftest-iso soak-iso ffsmoke-iso ffsmoke-test microvm-image rootfs build-musl test clean version curl_bin update-package update-test recovery-test
 all: iso
 
 # ── Kernel artifact: fetched, not built ─────────────────────────────────────
 # fetch-kernel.sh resolves vendor/aegis-<ver>.elf (local cache) or downloads the
 # release for KERNEL_VERSION. KERNEL_STRIPPED is the (already-stripped) kernel
 # the ESP image and ISO embed — same variable name the OS rules below expect.
-# Optional iwlwifi firmware, shipped as the graphical ISOs' 3rd Limine module
-# (module2) so the AX200 driver can init the radio. Vendored (fetched/copied)
-# rather than built here; absent → the ISO simply carries no WiFi firmware.
-IWL_FW := $(wildcard vendor/iwlwifi-cc-a0-59.ucode)
+# Pinned AX200 firmware, shipped as the third Limine module.
+IWL_FW := vendor/iwlwifi-cc-a0-59.ucode
+$(IWL_FW): tools/fetch-iwlwifi.sh
+	bash tools/fetch-iwlwifi.sh $@
 
 KERNEL_STRIPPED = $(BUILD)/aegis-stripped.elf
 # Prerequisites so a locally-dropped vendor/aegis-<ver>.elf (or a KERNEL_VERSION
@@ -48,7 +48,7 @@ KERNEL_STRIPPED = $(BUILD)/aegis-stripped.elf
 # build/aegis-stripped.elf exists once, make considers it satisfied forever
 # and silently keeps using a stale kernel no matter what changes underneath it.
 VENDOR_KERNEL := vendor/aegis-$(KERNEL_VERSION).elf
-$(KERNEL_STRIPPED): KERNEL_VERSION $(wildcard $(VENDOR_KERNEL))
+$(KERNEL_STRIPPED): KERNEL_VERSION tools/kernel.sha256 $(wildcard $(VENDOR_KERNEL))
 	bash tools/fetch-kernel.sh $(KERNEL_VERSION) $@
 
 # ── User program builds ─��──────────────────────────────────���────────────────
@@ -71,7 +71,7 @@ SIMPLE_USER_PROGS = \
     shutdown reboot aegisctl login stsh httpd sshd nettest polltest poll-test sockreftest fdpasstest contresume spawnleak \
     hostname ip \
     smpstress futexstress mmfaultstress elffuzz sysfuzz fduaf blkuaf extabtest vforkstress dltest captest cowtest stresstest \
-    perfbench-ipc forkbench selftest ffsmoke
+    perfbench-ipc forkbench schedverify selftest
 
 # Generate rules: user/bin/foo/foo.elf depends on musl AND its own sources,
 # so editing any .c/.h under user/bin/foo triggers a rebuild.  Without the
@@ -81,6 +81,12 @@ user/bin/$(1)/$(1).elf: $$(MUSL_BUILT) $$(wildcard user/bin/$(1)/*.c) $$(wildcar
 	$$(MAKE) -C user/bin/$(1)
 endef
 $(foreach p,$(SIMPLE_USER_PROGS),$(eval $(call SIMPLE_USER_RULE,$(p))))
+
+build/ffmpeg-install/lib/libavformat.a: tools/build-ffmpeg.sh tools/fetch-ffmpeg.sh
+	bash tools/build-ffmpeg.sh
+
+user/bin/ffsmoke/ffsmoke.elf: $(MUSL_BUILT) user/bin/ffsmoke/main.c user/bin/ffsmoke/Makefile build/ffmpeg-install/lib/libavformat.a
+	$(MAKE) -C user/bin/ffsmoke
 
 # Programs with non-.elf output names
 user/bin/vigil/vigil: user/bin/vigil/main.c $(MUSL_BUILT)
@@ -98,7 +104,7 @@ user/bin/chronos/chronos: user/bin/chronos/main.c $(MUSL_BUILT)
 # TinySSH (tinysshd) — built static with the HOST musl toolchain via its own
 # build (compile-and-run feature detection needs host-native binaries). The
 # makekey/printkey outputs are real copies (rootfs copies files, not symlinks).
-build/tinyssh/tinysshd build/tinyssh/tinysshd-makekey: tools/build-tinyssh.sh
+build/tinyssh/tinysshd build/tinyssh/tinysshd-makekey &: tools/build-tinyssh.sh
 	bash tools/build-tinyssh.sh
 
 # herald — package manager. Links BearSSL (already built for curl) and embeds
@@ -112,6 +118,12 @@ build/herald-keys/trusted_key.h: tools/herald-keygen.sh tools/herald-keys/truste
 
 user/bin/herald/herald.elf: $(wildcard user/bin/herald/*.c) $(wildcard user/bin/herald/*.h) user/bin/herald/Makefile build/herald-keys/trusted_key.h build/bearssl-install/lib/libbearssl.a $(MUSL_BUILT)
 	$(MAKE) -C user/bin/herald
+
+user/bin/lorica-update/lorica-update.elf: user/bin/lorica-update/main.c user/bin/lorica-update/Makefile user/lib/libinstall/libinstall.a $(MUSL_BUILT)
+	$(MAKE) -C user/bin/lorica-update
+
+user/bin/lorica-recover/lorica-recover.elf: user/bin/lorica-recover/main.c user/bin/lorica-recover/Makefile user/lib/libinstall/libinstall.a $(MUSL_BUILT)
+	$(MAKE) -C user/bin/lorica-recover
 
 # Signed sample package "hello" — demo + herald_test fixture, signed with the
 # production key whose public half is embedded in /bin/herald. The payload is
@@ -161,7 +173,7 @@ user/lib/glyph/libglyph.a: $(wildcard user/lib/glyph/*.c user/lib/glyph/*.h) $(M
 user/lib/libauth/libauth.a: user/lib/libauth/auth.c user/lib/libauth/auth.h
 	$(MAKE) -C user/lib/libauth
 
-user/lib/libinstall/libinstall.a: $(wildcard user/lib/libinstall/*.c user/lib/libinstall/*.h) $(MUSL_BUILT)
+user/lib/libinstall/libinstall.a: $(wildcard user/lib/libinstall/*.c user/lib/libinstall/*.h) $(MUSL_BUILT) build/bearssl-install/lib/libbearssl.a
 	$(MAKE) -C user/lib/libinstall
 
 # Programs with extra library dependencies. The graphical stack (lumen, bastion,
@@ -187,7 +199,7 @@ build/bearssl-install/lib/libbearssl.a:
 	bash tools/build-bearssl.sh
 
 build/curl/curl: build/bearssl-install/lib/libbearssl.a
-	bash tools/build-curl.sh || (mkdir -p build/curl && echo '#!/bin/sh' > $@ && chmod +x $@ && echo "[curl] build failed — using stub")
+	bash tools/build-curl.sh
 
 curl_bin: build/curl/curl
 
@@ -211,6 +223,7 @@ $(LIMINE_DIR)/limine-bios-cd.bin $(LIMINE_DIR)/limine-uefi-cd.bin \
 $(LIMINE_DIR)/BOOTX64.EFI $(LIMINE_DIR)/BOOTIA32.EFI: $(LIMINE_STAMP)
 ESP_DESKTOP = $(BUILD)/esp-desktop.img
 ESP_SERVER  = $(BUILD)/esp-server.img
+RECOVERY_ROOTFS = $(BUILD)/recovery-rootfs.img
 HOSTCC    ?= cc
 
 # Build Limine's host tool from the vendored source (used by `limine bios-install`).
@@ -218,39 +231,74 @@ $(LIMINE_BIN): $(LIMINE_DIR)/limine.c $(LIMINE_DIR)/limine-bios-hdd.h
 	@mkdir -p $(BUILD)
 	$(HOSTCC) -std=c99 -O2 -I$(LIMINE_DIR) -o $@ $(LIMINE_DIR)/limine.c
 
-# Installed-system ESP: 4 MiB FAT16 carrying Limine's UEFI binaries, the
-# generated installed-mode limine.conf, and a copy of the kernel. Limine reads
+# Installed-system ESP: 8 MiB FAT16 carrying Limine's UEFI binaries, the
+# generated installed-mode limine.conf, and current/previous kernel slots. Limine reads
 # the kernel from this FAT ESP (boot():/boot/aegis.elf) — reliable, unlike its
 # ext2 driver on our rootfs (1 KiB blocks / dir_index). The installer
 # raw-copies this image to the target disk's ESP partition unchanged
 # (user/lib/libinstall/copy.c); the kernel then mounts the real ext2 root from
 # nvme itself.
-# Size (8192 x 512B sectors = 4 MiB) MUST stay in lockstep with
+# Size (16384 x 512B sectors = 8 MiB) MUST stay in lockstep with
 # ESP_SIZE_BYTES in user/lib/libinstall/libinstall.h — the installer's GPT
 # layout and raw copy both derive from that constant. Content is ~1.3 MiB
-# (BOOTX64.EFI + stripped kernel + limine.conf); 4 MiB leaves headroom and
+# (BOOTX64.EFI + two 3 MiB kernel slots + limine.conf); 8 MiB leaves headroom and
 # clears the FAT16 minimum-cluster floor.
 # $(1)=ESP image  $(2)=gen-limine installed-mode (installed | server-installed).
 # The installed-boot menu differs by profile: desktop defaults to graphical,
 # server is text-only (no compositor to boot into).
 define ESP_RULE
 	@mkdir -p $(BUILD)
+	cp $(KERNEL_STRIPPED) $(1).kernel-slot
+	@test $$(stat -c %s $(1).kernel-slot) -le 3145728 || { echo 'kernel exceeds 3 MiB ESP slot' >&2; exit 1; }
+	truncate -s 3M $(1).kernel-slot
+	KERNEL_HASH=$$(tools/blake2b.sh $(1).kernel-slot) \
+	OLD_KERNEL_HASH=$$(tools/blake2b.sh $(1).kernel-slot) \
+	RECOVERY_HASH=$$(tools/blake2b.sh $(RECOVERY_ROOTFS)) \
 	sh tools/gen-limine-conf.sh $(2) > $(1).conf
-	dd if=/dev/zero of=$(1) bs=512 count=8192 2>/dev/null
-	/sbin/mkfs.fat -F 16 -s 1 $(1) >/dev/null 2>&1   # -s 1 (512B clusters): 4 MiB needs >4085 clusters for FAT16
+	dd if=/dev/zero of=$(1) bs=512 count=16384 2>/dev/null
+	/sbin/mkfs.fat -F 16 -s 1 $(1) >/dev/null 2>&1
 	mmd -i $(1) ::EFI
 	mmd -i $(1) ::EFI/BOOT
 	mmd -i $(1) ::boot
-	mcopy -i $(1) $(LIMINE_DIR)/BOOTX64.EFI ::EFI/BOOT/BOOTX64.EFI
-	mcopy -i $(1) $(LIMINE_DIR)/BOOTIA32.EFI ::EFI/BOOT/BOOTIA32.EFI
-	mcopy -i $(1) $(KERNEL_STRIPPED) ::boot/aegis.elf
+	SECURE_BOOT_KEY='$(SECURE_BOOT_KEY)' SECURE_BOOT_CERT='$(SECURE_BOOT_CERT)' tools/prepare-limine-efi.sh $(LIMINE_DIR)/BOOTX64.EFI $(1).conf $(1).BOOTX64.EFI
+	SECURE_BOOT_KEY='$(SECURE_BOOT_KEY)' SECURE_BOOT_CERT='$(SECURE_BOOT_CERT)' tools/prepare-limine-efi.sh $(LIMINE_DIR)/BOOTIA32.EFI $(1).conf $(1).BOOTIA32.EFI
+	mcopy -i $(1) $(1).BOOTX64.EFI ::EFI/BOOT/BOOTX64.EFI
+	mcopy -i $(1) $(1).BOOTIA32.EFI ::EFI/BOOT/BOOTIA32.EFI
+	rm -f $(1).BOOTX64.EFI $(1).BOOTIA32.EFI
+	mcopy -i $(1) $(1).kernel-slot ::boot/aegis.elf
+	mcopy -i $(1) $(1).kernel-slot ::boot/aegis.old
+	rm -f $(1).kernel-slot
+	mcopy -i $(1) $(RECOVERY_ROOTFS) ::boot/recovery.img
 	mcopy -i $(1) $(1).conf ::limine.conf
 endef
 
-$(ESP_DESKTOP): $(LIMINE_DIR)/BOOTX64.EFI $(LIMINE_DIR)/BOOTIA32.EFI $(KERNEL_STRIPPED) tools/gen-limine-conf.sh
+$(RECOVERY_ROOTFS): user/bin/lorica-recover/lorica-recover.elf tools/build-recovery-rootfs.sh
+	bash tools/build-recovery-rootfs.sh $@
+
+build/lorica-release: VERSION KERNEL_VERSION
+	@mkdir -p build
+	@printf 'NAME=LoricaOS\nVERSION=%s\nKERNEL_VERSION=%s\n' '$(AEGIS_OS_VERSION)' '$(KERNEL_VERSION)' > build/lorica-release
+	@printf 'loricaos-release\t%s\t\tbuilt-in\n' '$(AEGIS_OS_VERSION)' > build/lorica-release.db
+
+build/lorica-release.db: build/lorica-release
+	@:
+
+update-package: $(KERNEL_STRIPPED) user/bin/herald/herald.elf
+	bash tools/make-update-package.sh
+
+update-test: update-package $(ESP_SERVER) user/bin/lorica-update/lorica-update.elf build/curl/curl
+	bash tools/test-system-update.sh
+
+recovery-test: $(RECOVERY_ROOTFS) $(ESP_SERVER)
+	bash tools/test-ext2-repair.sh
+	@test "$$(tools/gen-limine-conf.sh server-installed | sed -n 's/^timeout: //p')" = 3
+	@tools/gen-limine-conf.sh server-installed | grep -q 'recovery.img'
+	bash tools/recovery-boot-test.sh
+
+$(ESP_DESKTOP): $(LIMINE_DIR)/BOOTX64.EFI $(LIMINE_DIR)/BOOTIA32.EFI $(LIMINE_BIN) $(KERNEL_STRIPPED) $(RECOVERY_ROOTFS) tools/gen-limine-conf.sh
 	$(call ESP_RULE,$@,installed)
 
-$(ESP_SERVER): $(LIMINE_DIR)/BOOTX64.EFI $(LIMINE_DIR)/BOOTIA32.EFI $(KERNEL_STRIPPED) tools/gen-limine-conf.sh
+$(ESP_SERVER): $(LIMINE_DIR)/BOOTX64.EFI $(LIMINE_DIR)/BOOTIA32.EFI $(LIMINE_BIN) $(KERNEL_STRIPPED) $(RECOVERY_ROOTFS) tools/gen-limine-conf.sh
 	$(call ESP_RULE,$@,server-installed)
 
 # ── Wallpaper / logo conversion ──���───────────────────────────────────────────
@@ -272,13 +320,21 @@ define LIMINE_ISO_RULE
 	cp $(4) $(2)/boot/rootfs.img
 	cp $(5) $(2)/boot/esp.img
 	$(if $(IWL_FW),cp $(IWL_FW) $(2)/boot/iwlwifi.ucode,@true)
+	KERNEL_HASH=$$(tools/blake2b.sh $(2)/boot/aegis.elf) \
+	ROOTFS_HASH=$$(tools/blake2b.sh $(2)/boot/rootfs.img) \
+	ESP_HASH=$$(tools/blake2b.sh $(2)/boot/esp.img) \
+	FW_HASH=$$(tools/blake2b.sh $(2)/boot/iwlwifi.ucode) \
 	$(if $(IWL_FW),WITH_FW=1 )sh tools/gen-limine-conf.sh $(3) > $(2)/boot/limine/limine.conf
 	cp $(LIMINE_DIR)/limine-bios.sys $(LIMINE_DIR)/limine-bios-cd.bin $(LIMINE_DIR)/limine-uefi-cd.bin $(2)/boot/limine/
-	cp $(LIMINE_DIR)/BOOTX64.EFI $(LIMINE_DIR)/BOOTIA32.EFI $(2)/EFI/BOOT/
+	SECURE_BOOT_KEY='$(SECURE_BOOT_KEY)' SECURE_BOOT_CERT='$(SECURE_BOOT_CERT)' tools/prepare-limine-efi.sh $(LIMINE_DIR)/BOOTX64.EFI $(2)/boot/limine/limine.conf $(2)/EFI/BOOT/BOOTX64.EFI
+	SECURE_BOOT_KEY='$(SECURE_BOOT_KEY)' SECURE_BOOT_CERT='$(SECURE_BOOT_CERT)' tools/prepare-limine-efi.sh $(LIMINE_DIR)/BOOTIA32.EFI $(2)/boot/limine/limine.conf $(2)/EFI/BOOT/BOOTIA32.EFI
+	cp $(LIMINE_DIR)/limine-uefi-cd.bin $(2)/boot/limine/uefi-boot.img
+	mcopy -o -i $(2)/boot/limine/uefi-boot.img $(2)/EFI/BOOT/BOOTX64.EFI ::EFI/BOOT/BOOTX64.EFI
+	mcopy -o -i $(2)/boot/limine/uefi-boot.img $(2)/EFI/BOOT/BOOTIA32.EFI ::EFI/BOOT/BOOTIA32.EFI
 	xorriso -as mkisofs -R -r -J \
 	    -b boot/limine/limine-bios-cd.bin \
 	    -no-emul-boot -boot-load-size 4 -boot-info-table \
-	    --efi-boot boot/limine/limine-uefi-cd.bin \
+	    --efi-boot boot/limine/uefi-boot.img \
 	    -efi-boot-part --efi-boot-image \
 	    --protective-msdos-label \
 	    $(2) -o $(1)
@@ -286,10 +342,10 @@ define LIMINE_ISO_RULE
 endef
 
 # ── The two production ISOs ─────────────────────────────────────────────────
-$(BUILD)/loricaos-desktop.iso: $(KERNEL_STRIPPED) $(ROOTFS_DESKTOP) $(ESP_DESKTOP) $(LIMINE_BIN) tools/gen-limine-conf.sh
+$(BUILD)/loricaos-desktop.iso: $(KERNEL_STRIPPED) $(ROOTFS_DESKTOP) $(ESP_DESKTOP) $(IWL_FW) $(LIMINE_BIN) tools/gen-limine-conf.sh
 	$(call LIMINE_ISO_RULE,$@,$(BUILD)/desktop-isodir,live,$(ROOTFS_DESKTOP),$(ESP_DESKTOP))
 
-$(BUILD)/loricaos-server.iso: $(KERNEL_STRIPPED) $(ROOTFS_SERVER) $(ESP_SERVER) $(LIMINE_BIN) tools/gen-limine-conf.sh
+$(BUILD)/loricaos-server.iso: $(KERNEL_STRIPPED) $(ROOTFS_SERVER) $(ESP_SERVER) $(IWL_FW) $(LIMINE_BIN) tools/gen-limine-conf.sh
 	$(call LIMINE_ISO_RULE,$@,$(BUILD)/server-isodir,server,$(ROOTFS_SERVER),$(ESP_SERVER))
 
 desktop-iso: $(BUILD)/loricaos-desktop.iso
@@ -414,5 +470,6 @@ clean:
 	       $(BUILD)/loricaos-desktop-dev.iso $(BUILD)/desktop-dev-isodir \
 	       $(BUILD)/desktop-isodir $(BUILD)/server-isodir $(BUILD)/selftest-isodir \
 	       $(BUILD)/rootfs-desktop.img $(BUILD)/rootfs-server.img \
+	       $(RECOVERY_ROOTFS) \
 	       $(BUILD)/esp-desktop.img $(BUILD)/esp-server.img \
 	       $(BUILD)/esp-desktop.img.conf $(BUILD)/esp-server.img.conf

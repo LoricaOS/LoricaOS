@@ -12,10 +12,10 @@
 
 /* On-disk ESP layout, shared by gpt.c (partition table math) and copy.c
  * (raw image copy).  ESP_SIZE_BYTES MUST equal the size of esp.img exactly
- * (Makefile $(ESP_IMG) rule: dd count=8192 512B sectors = 4 MiB) — the
+ * (Makefile ESP rule: dd count=16384 512B sectors = 8 MiB) — the
  * installer raw-copies the esp.img ramdisk onto the ESP partition. */
 #define ESP_ALIGN_BYTES (1ULL * 1024 * 1024)   /* 1 MiB start alignment */
-#define ESP_SIZE_BYTES  (4ULL * 1024 * 1024)   /* 4 MiB ESP             */
+#define ESP_SIZE_BYTES  (8ULL * 1024 * 1024)   /* 8 MiB: two 3 MiB kernels */
 
 /* Progress callback struct.  All callbacks are optional (NULL is OK).
  *
@@ -53,7 +53,7 @@ int install_list_blkdevs(install_blkdev_t *out, int max);
 int install_disk_has_aegis(const char *devname);
 
 /* GPT — write protective MBR + primary GPT + backup GPT.
- * Creates 12 MB ESP (LBA 2048..26623 in 512B terms) and Aegis root
+ * Creates the ESP described above at 1 MiB and an Aegis root after it.
  * (rest of disk).
  * block_size must be 512 or 4096 (native LBA size of the device).
  * Returns 0 on success, -1 on I/O error (error callback fired). */
@@ -72,9 +72,12 @@ int install_copy_esp(const char *devname, uint32_t block_size,
 
 /* Copy ramdisk0 (the ext2 rootfs image embedded as module 1) to
  * `dst_dev` (the Aegis root partition found via install_rescan_gpt).
- * block_size: native LBA size of dst_dev. Emits on_progress every 10%. */
+ * Then grow the copied filesystem to the partition, capped at 16 GiB by
+ * Aegis's one-block ext2 group-descriptor table. block_size: native LBA size
+ * of dst_dev. Emits on_progress every 10%. */
 int install_copy_rootfs(const char *dst_dev, uint64_t dst_blocks,
-                        uint32_t block_size, install_progress_t *p);
+                        uint32_t block_size, const char *root_password,
+                        install_progress_t *p);
 
 /* Installed-system boot config step. No-op under Limine: the bootloader and
  * limine.conf are carried in the ESP image (install_copy_esp), which boots the
@@ -135,6 +138,7 @@ int install_run_all(const char *devname, uint64_t disk_blocks,
                     const char *username,
                     const char *user_hash,
                     const char *admin_hash,   /* NULL/"" = user_hash */
+                    const char *root_password, /* NULL/"" = plaintext root */
                     install_progress_t *p);
 
 /* Obtain a sudo-style admin session for THIS process so the kernel will

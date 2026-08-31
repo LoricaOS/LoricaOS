@@ -45,7 +45,11 @@ DEBUGFS="/sbin/debugfs"
 # ── Create empty ext2 image ──────────────────────────────────────────────────
 rm -f "$ROOTFS_IMG"
 dd if=/dev/zero of="$ROOTFS_IMG" bs=512 count=$P1_SECTORS 2>/dev/null
-/sbin/mke2fs -t ext2 -F -b 4096 -L aegis-root "$ROOTFS_IMG" >/dev/null 2>&1
+# Keep inode tables proportional to an OS image, not mke2fs's tiny-filesystem
+# default (which spent roughly a quarter of every added group on inodes). 32 KiB
+# per inode leaves >1400 inodes in this one-group live image and scales to
+# >180k at the installer's 16 GiB ceiling.
+/sbin/mke2fs -t ext2 -F -b 4096 -i 32768 -L aegis-root "$ROOTFS_IMG" >/dev/null 2>&1
 
 # ── Helper: batch debugfs commands ───────────────────────────────────────────
 debugfs_run() {

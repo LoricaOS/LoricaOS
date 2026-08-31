@@ -12,6 +12,7 @@ LOG="$(mktemp)"
 
 timeout 120 qemu-system-x86_64 -machine pc -cdrom "$ISO" -boot order=d \
     -display none -vga std -nodefaults -serial stdio -no-reboot -m 2048M \
+    -object rng-random,id=rng0,filename=/dev/urandom -device virtio-rng-pci,rng=rng0 \
     > "$LOG" 2>&1 || true
 
 reached_login=0; grep -qE "login:" "$LOG" && reached_login=1

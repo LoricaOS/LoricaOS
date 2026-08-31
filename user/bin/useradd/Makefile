@@ -4,12 +4,13 @@ CFLAGS      = -O2 -fno-pie -no-pie -Wl,--build-id=none -Wall \
               -I../../lib/libinstall
 TARGET      = useradd.elf
 LIBINSTALL  = ../../lib/libinstall/libinstall.a
+BEARSSL     = ../../../build/bearssl-install
 
 all: $(TARGET)
 
 $(TARGET): main.c $(LIBINSTALL)
 	$(CC) $(CFLAGS) -o $@ main.c \
-	    -L../../lib/libinstall -linstall -lcrypt
+	    -L../../lib/libinstall -linstall -L$(BEARSSL)/lib -lbearssl -lcrypt
 
 $(LIBINSTALL):
 	$(MAKE) -C ../../lib/libinstall

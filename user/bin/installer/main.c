@@ -117,9 +117,10 @@ static int read_line(const char *prompt, char *buf, int bufsize)
  * they don't. Returns 0 on success, -1 on cancel or mismatch. */
 static int collect_credentials(char *username, int username_sz,
                                char *user_hash, int user_hash_sz,
-                               char *admin_hash, int admin_hash_sz)
+                               char *admin_hash, int admin_hash_sz,
+                               char *root_pw, int root_pw_sz)
 {
-    char pw[64], confirm[64];
+    char pw[64], confirm[64], account_pw[64], answer[8];
     int rc = -1;
 
     printf("\n--- Create your account ---\n");
@@ -149,6 +150,7 @@ static int collect_credentials(char *username, int username_sz,
         printf("ERROR: crypt() failed\n");
         goto out;
     }
+    memcpy(account_pw,pw,sizeof(account_pw));
 
     /* Optional separate admin password (changeable later with `adminpw`). */
     admin_hash[0] = '\0';
@@ -173,11 +175,19 @@ static int collect_credentials(char *username, int username_sz,
     }
 
     printf("User '%s' configured (uid 0).\n", username);
+    root_pw[0]='\0';
+    if(read_line("Encrypt root filesystem with the account password? [Y/n] ",answer,sizeof(answer))==0||
+       (answer[0]!='n'&&answer[0]!='N')){
+        strncpy(root_pw,account_pw,(size_t)root_pw_sz-1);root_pw[root_pw_sz-1]='\0';
+        printf("Encrypted root enabled. You will enter this password at boot.\n");
+    }
     rc = 0;
 out:
     /* Don't leave plaintext passwords on the stack after we return. */
     memset(pw, 0, sizeof(pw));
     memset(confirm, 0, sizeof(confirm));
+    memset(account_pw,0,sizeof(account_pw));
+    memset(answer,0,sizeof(answer));
     return rc;
 }
 
@@ -298,9 +308,11 @@ int main(void)
     char username[64]    = "";
     char user_hash[256]  = "";
     char admin_hash[256] = "";
+    char root_pw[64]      = "";
     if (collect_credentials(username, sizeof(username),
                             user_hash, sizeof(user_hash),
-                            admin_hash, sizeof(admin_hash)) < 0) {
+                            admin_hash, sizeof(admin_hash),
+                            root_pw, sizeof(root_pw)) < 0) {
         printf("Credential collection failed. Aborting.\n");
         return 1;
     }
@@ -318,10 +330,13 @@ int main(void)
                         username,
                         user_hash,
                         admin_hash,
+                        root_pw,
                         &prog) < 0) {
+        memset(root_pw,0,sizeof(root_pw));
         printf("\n=== Installation FAILED ===\n");
         return 1;
     }
+    memset(root_pw,0,sizeof(root_pw));
 
     printf("\n=== Installation complete! ===\n");
     printf("Remove the ISO and reboot to start LoricaOS from disk.\n\n");

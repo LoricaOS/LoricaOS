@@ -13,6 +13,9 @@
  * static string. */
 int tar_extract_mem(const void *buf, size_t len, const char *dest_root,
                     const char *const *allowed_prefixes, const char **err);
+int tar_extract_mem_owned(const void *buf, size_t len, const char *dest_root,
+                          const char *const *allowed_prefixes, int owner_fd,
+                          const char **err);
 
 /* Locate a single entry by exact name; on success sets *data (pointer INTO
  * buf, no copy) and *size. Returns 1 if found, 0 if not, negative on malformed

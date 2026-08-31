@@ -32,8 +32,16 @@ build/tinyssh/tinysshd-makekey  /bin/tinysshd-makekey
 # herald — package manager (links BearSSL). Signed sample package + its
 # detached signature are staged for the demo and tests/tests/herald_test.rs.
 user/bin/herald/herald.elf      /bin/herald
+user/bin/lorica-update/lorica-update.elf /bin/lorica-update
 build/herald-sample.hpkg        /usr/share/herald/sample.hpkg
 build/herald-sample.hpkg.sig    /usr/share/herald/sample.hpkg.sig
+
+# Signed system-update staging. lorica-update copies only a validated kernel
+# from this INSTALL-protected tree to the fixed ESP slots.
+build/aegis-stripped.elf         /etc/aegis/update/aegis.elf
+KERNEL_VERSION                   /etc/aegis/update/kernel-version
+build/lorica-release             /etc/lorica-release
+build/lorica-release.db          /var/lib/herald/db
 
 # Coreutils
 vendor/coreutils/bin/ls              /bin/ls
@@ -127,6 +135,7 @@ user/bin/futexstress/futexstress.elf /bin/futexstress
 user/bin/mmfaultstress/mmfaultstress.elf /bin/mmfaultstress
 user/bin/vforkstress/vforkstress.elf /bin/vforkstress
 user/bin/forkbench/forkbench.elf /bin/forkbench
+user/bin/schedverify/schedverify.elf /bin/schedverify
 user/bin/dhcp/dhcp              /bin/dhcp
 user/bin/chronos/chronos        /bin/chronos
 build/curl/curl                 /bin/curl

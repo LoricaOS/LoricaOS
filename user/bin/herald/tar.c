@@ -229,7 +229,7 @@ static int magic_ok(const unsigned char *hdr)
  */
 static int tar_walk(const void *buf, size_t len, const char *dest_root,
                     const char *const *allowed_prefixes,
-                    const char **err, int extract,
+                    const char **err, int extract, int owner_fd,
                     const char *find_name,
                     const unsigned char **fd, size_t *fsz)
 {
@@ -351,6 +351,12 @@ static int tar_walk(const void *buf, size_t len, const char *dest_root,
                     }
                 }
 
+                /* The manifest authenticates metadata; it is not payload. */
+                if (strcmp(path, "manifest") == 0) {
+                    off = data_off + padded;
+                    continue;
+                }
+
                 /* dest_root + "/" + path + NUL */
                 need = rl + 1 + strlen(path) + 1;
                 if (need > sizeof(full)) {
@@ -405,6 +411,12 @@ static int tar_walk(const void *buf, size_t len, const char *dest_root,
                         SET_ERR(err, "tar: close failed");
                         return -1;
                     }
+                    if (owner_fd >= 0 &&
+                        (write(owner_fd, path, strlen(path)) != (ssize_t)strlen(path) ||
+                         write(owner_fd, "\n", 1) != 1)) {
+                        SET_ERR(err, "tar: owner list write failed");
+                        return -1;
+                    }
                 }
             }
         }
@@ -427,7 +439,20 @@ int tar_extract_mem(const void *buf, size_t len, const char *dest_root,
         SET_ERR(err, "tar: null argument");
         return -1;
     }
-    return tar_walk(buf, len, dest_root, allowed_prefixes, err, 1,
+    return tar_walk(buf, len, dest_root, allowed_prefixes, err, 1, -1,
+                    NULL, NULL, NULL);
+}
+
+int tar_extract_mem_owned(const void *buf, size_t len, const char *dest_root,
+                          const char *const *allowed_prefixes, int owner_fd,
+                          const char **err)
+{
+    SET_ERR(err, NULL);
+    if (buf == NULL || dest_root == NULL || owner_fd < 0) {
+        SET_ERR(err, "tar: null argument");
+        return -1;
+    }
+    return tar_walk(buf, len, dest_root, allowed_prefixes, err, 1, owner_fd,
                     NULL, NULL, NULL);
 }
 
@@ -444,5 +469,5 @@ int tar_find_mem(const void *buf, size_t len, const char *name,
      * "./" is stripped from entries, so strip it from the query too. */
     match = strip_dot_slash(name);
 
-    return tar_walk(buf, len, NULL, NULL, &err, 0, match, data, size);
+    return tar_walk(buf, len, NULL, NULL, &err, 0, -1, match, data, size);
 }

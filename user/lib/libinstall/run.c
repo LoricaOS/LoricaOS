@@ -14,6 +14,7 @@ int install_run_all(const char *devname, uint64_t disk_blocks,
                     const char *username,
                     const char *user_hash,
                     const char *admin_hash,
+                    const char *root_password,
                     install_progress_t *p)
 {
     if (!devname || !username || !user_hash) {
@@ -98,7 +99,7 @@ int install_run_all(const char *devname, uint64_t disk_blocks,
     if (p && p->on_progress) p->on_progress(100, p->ctx);
 
     /* 7. Copy rootfs */
-    if (install_copy_rootfs(root_part, root_blocks, block_size, p) < 0)
+    if (install_copy_rootfs(root_part, root_blocks, block_size, root_password, p) < 0)
         return -1;
 
     /* 8. Copy ESP */

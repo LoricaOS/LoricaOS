@@ -6,12 +6,13 @@ CFLAGS     = -O2 -fno-pie -no-pie -Wall -Wl,--build-id=none \
 TARGET     = gui-installer.elf
 GLYPH      = ../../lib/glyph/libglyph.a
 LIBINSTALL = ../../lib/libinstall/libinstall.a
+BEARSSL    = ../../../build/bearssl-install
 
 $(TARGET): main.c $(GLYPH) $(LIBINSTALL)
 	$(CC) $(CFLAGS) -o $@ main.c \
 	    -L../../lib/libinstall -linstall \
 	    -L../../lib/glyph -lglyph \
-	    -lcrypt
+	    -L$(BEARSSL)/lib -lbearssl -lcrypt
 
 $(GLYPH):
 	$(MAKE) -C ../../lib/glyph

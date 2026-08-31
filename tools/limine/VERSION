@@ -1,4 +1,3 @@
-v11.4.1-binary
-https://github.com/limine-bootloader/limine (branch v11.x-binary)
-Pin for tools/fetch-limine.sh (first token = the git tag fetched). x86_64
-BIOS+UEFI subset for the Aegis ISO + installer ESP. Bump the tag to upgrade.
+v12.5.2 5e2d6eb86623fcdcd2a873c9eca7dcafccb34182c17779535fe824fd57b688c5
+https://github.com/limine-bootloader/limine/releases/download/v12.5.2/limine-binary.tar.xz
+Pin for tools/fetch-limine.sh (version + SHA-256). x86 BIOS/UEFI subset.

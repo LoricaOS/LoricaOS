@@ -7,7 +7,7 @@
 # and runs on Aegis (kernel provides /dev/urandom, getrandom, /dev/ptmx, sockets).
 set -e
 
-REPO="$(git rev-parse --show-toplevel)"
+REPO="${REPO:-$(git rev-parse --show-toplevel)}"
 SRC="$REPO/references/tinyssh"
 OUT="$REPO/build/tinyssh"
 TINYSSH_URL="https://github.com/janmojzis/tinyssh"

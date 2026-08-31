@@ -143,7 +143,7 @@ mkdir -p "$(dirname "$OUT_EXT2")"; rm -f "$OUT_EXT2"
 # (62M is what the netboot loop has been running). ISO builds can use the
 # roomier default.
 ROOTFS_SIZE="${ROOTFS_SIZE:-128M}"
-/sbin/mke2fs -q -t ext2 -b 4096 -d "$STAGE" -L aegis-arm64 "$OUT_EXT2" "$ROOTFS_SIZE"
+/sbin/mke2fs -q -t ext2 -b 4096 -i 32768 -d "$STAGE" -L aegis-arm64 "$OUT_EXT2" "$ROOTFS_SIZE"
 # Drop the trailing free blocks. The fs is a single block group with 4 KiB
 # blocks, so it has no backup superblocks in the tail and everything past the
 # last used block is zero; the kernel's ramdisk_init reads the real block count

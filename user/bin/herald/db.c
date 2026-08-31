@@ -16,7 +16,12 @@
 #include "db.h"
 
 #define HERALD_DB_CAP  256
-#define HERALD_DB_TMP  HERALD_DB_PATH ".tmp"
+static char db_path[512] = HERALD_DB_PATH;
+
+void db_set_path(const char *path)
+{
+    snprintf(db_path, sizeof(db_path), "%s", path ? path : HERALD_DB_PATH);
+}
 
 /* Create `path` and all missing parent directories (mkdir -p). Errors other
  * than EEXIST are ignored here; the caller's subsequent fopen surfaces a real
@@ -90,7 +95,7 @@ db_load(herald_db_entry_t *out, int max)
     if (!out || max <= 0)
         return -1;
 
-    FILE *f = fopen(HERALD_DB_PATH, "r");
+    FILE *f = fopen(db_path, "r");
     if (!f) {
         if (errno == ENOENT)
             return 0;
@@ -156,10 +161,16 @@ db_find(const char *id, herald_db_entry_t *out)
 static int
 db_write_all(const herald_db_entry_t *entries, int n)
 {
+    char dir[512], tmp[516], *slash;
     /* Ensure the directory (and any missing parents) exists. */
-    mkdir_p(HERALD_DB_DIR);
+    snprintf(dir, sizeof(dir), "%s", db_path);
+    slash = strrchr(dir, '/');
+    if (!slash || snprintf(tmp, sizeof(tmp), "%s.tmp", db_path) >= (int)sizeof(tmp))
+        return -1;
+    *slash = '\0';
+    mkdir_p(dir);
 
-    FILE *f = fopen(HERALD_DB_TMP, "w");
+    FILE *f = fopen(tmp, "w");
     if (!f)
         return -1;
 
@@ -168,24 +179,24 @@ db_write_all(const herald_db_entry_t *entries, int n)
                     entries[i].id, entries[i].version,
                     entries[i].exec, entries[i].sha256) < 0) {
             fclose(f);
-            unlink(HERALD_DB_TMP);
+            unlink(tmp);
             return -1;
         }
     }
 
     if (fflush(f) != 0) {
         fclose(f);
-        unlink(HERALD_DB_TMP);
+        unlink(tmp);
         return -1;
     }
     if (fclose(f) != 0) {
-        unlink(HERALD_DB_TMP);
+        unlink(tmp);
         return -1;
     }
 
     /* Atomic replace. */
-    if (rename(HERALD_DB_TMP, HERALD_DB_PATH) != 0) {
-        unlink(HERALD_DB_TMP);
+    if (rename(tmp, db_path) != 0) {
+        unlink(tmp);
         return -1;
     }
     return 0;
