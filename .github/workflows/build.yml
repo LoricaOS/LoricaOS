@@ -25,6 +25,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: arm64 desktop == x86 components.list
         run: bash tools/check-desktop-parity.sh
+      - name: Glyph text bounds regression
+        run: make -C user/lib/glyph test
 
   # ── x86-64: desktop + server ISOs ──────────────────────────────────────
   x86:

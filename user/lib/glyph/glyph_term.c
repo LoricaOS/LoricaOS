@@ -19,6 +19,7 @@
 #include <time.h>
 #include <sys/ioctl.h>
 #include <sys/syscall.h>
+#include <termios.h>
 
 /* sys_spawn: create process from ELF path without fork.
  * syscall(514, path, argv, envp, stdio_fd, cap_mask) */
@@ -64,6 +65,60 @@ static void init_ansi_256(void)
         int v = 8 + i * 10;
         ansi_256[232 + i] = (uint32_t)((v << 16) | (v << 8) | v);
     }
+}
+
+/* Built-in color schemes. Scheme 0 ("Lorica") uses GLYPH_TERM_DYN for its
+ * defaults so it follows the live desktop theme and keeps the frosted-glass
+ * background key; the rest are fixed opaque palettes. */
+static const glyph_term_theme_t s_term_themes[] = {
+  { "Lorica",
+    { 0x000000,0xCC0000,0x00CC00,0xCCAA00,0x4488CC,0xCC00CC,0x00CCCC,0xCCCCCC,
+      0x555555,0xFF5555,0x55FF55,0xFFFF55,0x5599FF,0xFF55FF,0x55FFFF,0xFFFFFF },
+    GLYPH_TERM_DYN, GLYPH_TERM_DYN, GLYPH_TERM_DYN, 0x004488CC },
+  { "Solarized Dark",
+    { 0x073642,0xdc322f,0x859900,0xb58900,0x268bd2,0xd33682,0x2aa198,0xeee8d5,
+      0x002b36,0xcb4b16,0x586e75,0x657b83,0x839496,0x6c71c4,0x93a1a1,0xfdf6e3 },
+    0x839496, 0x002b36, 0x839496, 0x073642 },
+  { "Solarized Light",
+    { 0x073642,0xdc322f,0x859900,0xb58900,0x268bd2,0xd33682,0x2aa198,0xeee8d5,
+      0x002b36,0xcb4b16,0x586e75,0x657b83,0x839496,0x6c71c4,0x93a1a1,0xfdf6e3 },
+    0x657b83, 0xfdf6e3, 0x657b83, 0xeee8d5 },
+  { "Gruvbox Dark",
+    { 0x282828,0xcc241d,0x98971a,0xd79921,0x458588,0xb16286,0x689d6a,0xa89984,
+      0x928374,0xfb4934,0xb8bb26,0xfabd2f,0x83a598,0xd3869b,0x8ec07c,0xebdbb2 },
+    0xebdbb2, 0x282828, 0xebdbb2, 0x504945 },
+  { "Nord",
+    { 0x3b4252,0xbf616a,0xa3be8c,0xebcb8b,0x81a1c1,0xb48ead,0x88c0d0,0xe5e9f0,
+      0x4c566a,0xbf616a,0xa3be8c,0xebcb8b,0x81a1c1,0xb48ead,0x8fbcbb,0xeceff4 },
+    0xd8dee9, 0x2e3440, 0xd8dee9, 0x434c5e },
+  { "Dracula",
+    { 0x21222c,0xff5555,0x50fa7b,0xf1fa8c,0xbd93f9,0xff79c6,0x8be9fd,0xf8f8f2,
+      0x6272a4,0xff6e6e,0x69ff94,0xffffa5,0xd6acff,0xff92df,0xa4ffff,0xffffff },
+    0xf8f8f2, 0x282a36, 0xf8f8f2, 0x44475a },
+};
+#define TERM_NTHEMES ((int)(sizeof(s_term_themes)/sizeof(s_term_themes[0])))
+
+/* Palette-indexed color marker: cells store TERM_PAL(idx) for ANSI colors so a
+ * theme switch recolors existing text; 0x00RRGGBB = truecolor; DEFAULT = theme. */
+#define TERM_PAL(idx) (0x01000000u | (uint32_t)(idx))
+
+static uint32_t term_fg(glyph_term_t *tp)
+{ uint32_t f = tp->theme->fg; return f == GLYPH_TERM_DYN ? C_TERM_FG : f; }
+static uint32_t term_bg(glyph_term_t *tp)
+{ uint32_t b = tp->theme->bg; return b == GLYPH_TERM_DYN ? C_TERM_BG : b; }
+static uint32_t term_cursor(glyph_term_t *tp)
+{ uint32_t c = tp->theme->cursor; return c == GLYPH_TERM_DYN ? C_TERM_FG : c; }
+
+/* Resolve a stored cell color to concrete RGB through the active theme. */
+static uint32_t term_resolve(glyph_term_t *tp, uint32_t v, int is_bg)
+{
+    if (v == TERM_DEFAULT_COLOR)
+        return is_bg ? term_bg(tp) : term_fg(tp);
+    if ((v & 0xFF000000u) == 0x01000000u) {
+        int idx = (int)(v & 0xFFu);
+        return idx < 16 ? tp->theme->ansi[idx] : ansi_256[idx];
+    }
+    return v & 0x00FFFFFFu;
 }
 
 /* Access a cell in the ring buffer.
@@ -140,7 +195,8 @@ glyph_term_render(glyph_term_t *tp, surface_t *s,
     int ch = tp->cell_h;
 
     /* Clear the caller-specified background rect */
-    draw_fill_rect(s, clear_x, clear_y, clear_w, clear_h, C_TERM_BG);
+    uint32_t base_bg = term_bg(tp);
+    draw_fill_rect(s, clear_x, clear_y, clear_w, clear_h, base_bg);
 
     /* Pre-normalize selection once (not per-cell) */
     int has_sel = tp->sel_active;
@@ -170,28 +226,28 @@ glyph_term_render(glyph_term_t *tp, surface_t *s,
             int px = ox + c * cw;
             int py = oy + r * ch;
 
-            /* Resolve colors */
-            uint32_t fg = (cell->fg != TERM_DEFAULT_COLOR) ? cell->fg : C_TERM_FG;
-            uint32_t bg = (cell->bg != TERM_DEFAULT_COLOR) ? cell->bg : C_TERM_BG;
+            /* Resolve colors through the active theme */
+            uint32_t fg = term_resolve(tp, cell->fg, 0);
+            uint32_t bg = term_resolve(tp, cell->bg, 1);
 
             /* Apply reverse video */
             if (cell->attrs & ATTR_REVERSE) {
                 uint32_t tmp = fg; fg = bg; bg = tmp;
             }
 
-            /* Draw cell background if non-default */
-            if (bg != C_TERM_BG)
+            /* Draw cell background if it differs from the base fill */
+            if (bg != base_bg)
                 draw_fill_rect(s, px, py, cw, ch, bg);
 
             if (row_has_sel && cell_in_sel(r, c, sr, sc, er, ec))
-                draw_blend_rect(s, px, py, cw, ch, SEL_HIGHLIGHT, SEL_ALPHA);
+                draw_blend_rect(s, px, py, cw, ch, tp->theme->selection, SEL_ALPHA);
 
             if (cell->ch != ' ' || (cell->attrs & ATTR_UNDERLINE)) {
                 if (cell->ch != ' ') {
                     if (g_font_mono)
-                        font_draw_char(s, g_font_mono, 16, px, py, cell->ch, fg);
+                        font_draw_char(s, g_font_mono, tp->font_px, px, py, cell->ch, fg);
                     else
-                        draw_char(s, px, py, cell->ch, fg, C_TERM_BG);
+                        draw_char(s, px, py, cell->ch, fg, base_bg);
                 }
                 /* Underline: 1px line at bottom of cell */
                 if (cell->attrs & ATTR_UNDERLINE)
@@ -200,15 +256,25 @@ glyph_term_render(glyph_term_t *tp, surface_t *s,
         }
     }
 
-    /* Blinking cursor block (only when viewing bottom).
-     * Uses wall clock so blink works even when terminal is idle. */
+    /* Cursor (only when viewing the bottom). Shape per cursor_style; blink uses
+     * the wall clock so it toggles even when idle (steady if blink is off). */
     if (tp->master_fd >= 0 && tp->scroll_offset == 0 && tp->cursor_visible) {
-        struct timespec now;
-        clock_gettime(CLOCK_REALTIME, &now);
-        int phase = (int)(now.tv_nsec / 500000000L) & 1; /* toggles every 500ms */
-        if (!phase)
-            draw_fill_rect(s, ox + tp->cx * cw, oy + tp->cy * ch,
-                           cw, ch, C_TERM_FG);
+        int on = 1;
+        if (tp->cursor_blink) {
+            struct timespec now;
+            clock_gettime(CLOCK_REALTIME, &now);
+            on = !((int)(now.tv_nsec / 500000000L) & 1); /* 500ms toggle */
+        }
+        if (on) {
+            int px = ox + tp->cx * cw, py = oy + tp->cy * ch;
+            uint32_t cc = term_cursor(tp);
+            if (tp->cursor_style == GLYPH_TERM_CURSOR_BEAM)
+                draw_fill_rect(s, px, py, 2, ch, cc);
+            else if (tp->cursor_style == GLYPH_TERM_CURSOR_UNDERLINE)
+                draw_fill_rect(s, px, py + ch - 2, cw, 2, cc);
+            else
+                draw_fill_rect(s, px, py, cw, ch, cc);
+        }
     }
 
     /* Scrollbar — only visible when scrolled back or dragging */
@@ -221,12 +287,13 @@ glyph_term_render(glyph_term_t *tp, surface_t *s,
         draw_blend_rect(s, track_x, track_y, SB_WIDTH, track_h, 0x00000000, 30);
 
         /* Thumb: size proportional to visible/total, position from offset */
-        int total = SCROLLBACK_LINES + tp->rows;
+        int total = tp->scrollback + tp->rows;
         int thumb_h = tp->rows * track_h / total;
         if (thumb_h < 16) thumb_h = 16;
         /* scroll_offset=0 → thumb at bottom; scroll_offset=max → top */
         int usable = track_h - thumb_h;
-        int thumb_y = track_y + usable - (usable * tp->scroll_offset / SCROLLBACK_LINES);
+        int thumb_y = track_y + usable - (usable * tp->scroll_offset /
+                                          (tp->scrollback ? tp->scrollback : 1));
 
         uint32_t tc = tp->sb_dragging ? SB_THUMB_HI : SB_THUMB_COLOR;
         draw_fill_rect(s, track_x + 1, thumb_y, SB_WIDTH - 2, thumb_h, tc);
@@ -350,26 +417,26 @@ static void term_csi(glyph_term_t *tp, int final)
             else if (p >= 30 && p <= 37) {
                 int idx = p - 30;
                 if (tp->cur_attrs & ATTR_BOLD) idx += 8;
-                tp->cur_fg = ansi_colors[idx];
+                tp->cur_fg = TERM_PAL(idx);
             }
             else if (p == 39) tp->cur_fg = TERM_DEFAULT_COLOR;
-            else if (p >= 40 && p <= 47) tp->cur_bg = ansi_colors[p - 40];
+            else if (p >= 40 && p <= 47) tp->cur_bg = TERM_PAL(p - 40);
             else if (p == 49) tp->cur_bg = TERM_DEFAULT_COLOR;
-            else if (p >= 90 && p <= 97) tp->cur_fg = ansi_colors[p - 90 + 8];
-            else if (p >= 100 && p <= 107) tp->cur_bg = ansi_colors[p - 100 + 8];
+            else if (p >= 90 && p <= 97) tp->cur_fg = TERM_PAL(p - 90 + 8);
+            else if (p >= 100 && p <= 107) tp->cur_bg = TERM_PAL(p - 100 + 8);
             /* 256-color: 38;5;N (fg) / 48;5;N (bg) */
             else if (p == 38 && pi + 2 < tp->esc_nparam
                      && tp->esc_params[pi + 1] == 5) {
                 int idx = tp->esc_params[pi + 2];
                 if (idx >= 0 && idx < 256)
-                    tp->cur_fg = ansi_256[idx];
+                    tp->cur_fg = TERM_PAL(idx);
                 pi += 2;
             }
             else if (p == 48 && pi + 2 < tp->esc_nparam
                      && tp->esc_params[pi + 1] == 5) {
                 int idx = tp->esc_params[pi + 2];
                 if (idx >= 0 && idx < 256)
-                    tp->cur_bg = ansi_256[idx];
+                    tp->cur_bg = TERM_PAL(idx);
                 pi += 2;
             }
             /* Truecolor: 38;2;R;G;B (fg) / 48;2;R;G;B (bg) */
@@ -826,7 +893,13 @@ glyph_term_create(int cols, int rows, int cell_w, int cell_h,
     tp->cell_h = cell_h;
     tp->pad_x = pad_x;
     tp->pad_y = pad_y;
-    tp->total_rows = rows + SCROLLBACK_LINES;
+    /* Runtime-configurable defaults (match the old hard-coded behavior). */
+    tp->theme = &s_term_themes[0];
+    tp->cursor_style = GLYPH_TERM_CURSOR_BLOCK;
+    tp->cursor_blink = 1;
+    tp->font_px = 16;
+    tp->scrollback = SCROLLBACK_LINES;
+    tp->total_rows = rows + tp->scrollback;
     tp->scroll_top = 0;
     tp->scroll_offset = 0;
 
@@ -852,6 +925,100 @@ glyph_term_destroy(glyph_term_t *tp)
         return;
     free(tp->grid);
     free(tp);
+}
+
+/* Push the current grid dimensions to the PTY so programs (vim, less, the
+ * shell's line editor) know the real window size. Call once after the caller
+ * sets master_fd, and it's re-applied on every resize. */
+void glyph_term_apply_winsize(glyph_term_t *tp)
+{
+    if (tp->master_fd < 0)
+        return;
+    struct winsize ws;
+    ws.ws_row = (unsigned short)tp->rows;
+    ws.ws_col = (unsigned short)tp->cols;
+    ws.ws_xpixel = (unsigned short)(tp->cols * tp->cell_w);
+    ws.ws_ypixel = (unsigned short)(tp->rows * tp->cell_h);
+    ioctl(tp->master_fd, TIOCSWINSZ, &ws);
+}
+
+int
+glyph_term_resize(glyph_term_t *tp, int cols, int rows,
+                  int cell_w, int cell_h, int font_px)
+{
+    if (!tp || cols < 1 || rows < 1)
+        return -1;
+    if (font_px < 1) font_px = tp->font_px;
+
+    int new_total = rows + tp->scrollback;
+    glyph_term_cell_t *ng = calloc((unsigned)(new_total * cols), sizeof(*ng));
+    if (!ng)
+        return -1;
+    for (int i = 0; i < new_total * cols; i++)
+        ng[i] = (glyph_term_cell_t){' ', TERM_DEFAULT_COLOR, TERM_DEFAULT_COLOR, 0};
+
+    /* Preserve the visible screen (top-left overlap). Scrollback is reset —
+     * ponytail: no reflow/rewrap; keeping the visible grid is the 90% that
+     * matters, and re-wrapping a ring buffer across a column change is a lot of
+     * code for a rare action. */
+    int cr = rows < tp->rows ? rows : tp->rows;
+    int cc = cols < tp->cols ? cols : tp->cols;
+    for (int r = 0; r < cr; r++) {
+        glyph_term_cell_t *src = grid_cell(tp, r, 0);
+        for (int c = 0; c < cc; c++)
+            ng[r * cols + c] = src[c];
+    }
+
+    free(tp->grid);
+    tp->grid = ng;
+    tp->cols = cols;
+    tp->rows = rows;
+    tp->cell_w = cell_w;
+    tp->cell_h = cell_h;
+    tp->font_px = font_px;
+    tp->total_rows = new_total;
+    tp->scroll_top = 0;
+    tp->scroll_offset = 0;
+    if (tp->cx >= cols) tp->cx = cols - 1;
+    if (tp->cy >= rows) tp->cy = rows - 1;
+    tp->sel_active = 0;
+    tp->sel_done = 0;
+
+    glyph_term_apply_winsize(tp);
+    return 0;
+}
+
+void glyph_term_set_theme(glyph_term_t *tp, int scheme)
+{
+    if (!tp) return;
+    if (scheme < 0) scheme = 0;
+    if (scheme >= TERM_NTHEMES) scheme = TERM_NTHEMES - 1;
+    tp->theme = &s_term_themes[scheme];
+}
+
+void glyph_term_set_cursor_style(glyph_term_t *tp, int style)
+{
+    if (tp) tp->cursor_style = style;
+}
+
+void glyph_term_set_cursor_blink(glyph_term_t *tp, int on)
+{
+    if (tp) tp->cursor_blink = on ? 1 : 0;
+}
+
+int glyph_term_theme_count(void) { return TERM_NTHEMES; }
+
+const char *glyph_term_theme_name(int scheme)
+{
+    if (scheme < 0 || scheme >= TERM_NTHEMES) return "";
+    return s_term_themes[scheme].name;
+}
+
+uint32_t glyph_term_theme_preview(int scheme)
+{
+    if (scheme < 0 || scheme >= TERM_NTHEMES) return 0;
+    uint32_t bg = s_term_themes[scheme].bg;
+    return bg == GLYPH_TERM_DYN ? 0x00141A24u : bg;  /* frost → a dark chip */
 }
 
 /* ---- PTY + shell spawning ---- */
