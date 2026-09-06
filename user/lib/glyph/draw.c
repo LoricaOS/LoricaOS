@@ -187,6 +187,45 @@ void draw_line(surface_t *s, int x0, int y0, int x1, int y1, uint32_t color)
     }
 }
 
+/* Alpha-blend a single pixel (alpha 0-255). */
+static void blend_px(surface_t *s, int x, int y, uint32_t color, int alpha)
+{
+    if (x < 0 || x >= s->w || y < 0 || y >= s->h || alpha <= 0)
+        return;
+    if (alpha >= 255) {
+        s->buf[y * s->pitch + x] = color;
+        return;
+    }
+    uint32_t bg = s->buf[y * s->pitch + x];
+    int inv = 255 - alpha;
+    uint32_t r = (((color >> 16) & 0xFF) * (unsigned)alpha + ((bg >> 16) & 0xFF) * (unsigned)inv) / 255;
+    uint32_t g = (((color >> 8) & 0xFF) * (unsigned)alpha + ((bg >> 8) & 0xFF) * (unsigned)inv) / 255;
+    uint32_t b = ((color & 0xFF) * (unsigned)alpha + (bg & 0xFF) * (unsigned)inv) / 255;
+    s->buf[y * s->pitch + x] = (r << 16) | (g << 8) | b;
+}
+
+/* One anti-aliased rounded corner: fill the r×r block at (sx,sy) with
+ * per-pixel arc coverage (×alpha), blended over existing content. left/top
+ * select which corner the arc opens toward. Coverage compares 2×-scaled
+ * squared distance against (2r∓1)² — a 1px smooth rim, no sqrt. */
+static void aa_corner(surface_t *s, int sx, int sy, int r, int left, int top,
+                      uint32_t color, int alpha)
+{
+    int in2  = (2 * r - 1) * (2 * r - 1);
+    int out2 = (2 * r + 1) * (2 * r + 1);
+    for (int j = 0; j < r; j++)
+        for (int i = 0; i < r; i++) {
+            int dx = left ? 2 * (i - r) + 1 : 2 * i + 1;
+            int dy = top  ? 2 * (j - r) + 1 : 2 * j + 1;
+            int d2 = dx * dx + dy * dy;
+            if (d2 >= out2)
+                continue;
+            int a = d2 <= in2 ? alpha
+                              : alpha * (out2 - d2) / (out2 - in2);
+            blend_px(s, sx + i, sy + j, color, a);
+        }
+}
+
 void draw_circle(surface_t *s, int cx, int cy, int r, uint32_t color)
 {
     int x = r, y = 0;
@@ -211,37 +250,73 @@ void draw_circle(surface_t *s, int cx, int cy, int r, uint32_t color)
     }
 }
 
-static void draw_hline(surface_t *s, int x0, int x1, int y, uint32_t color)
-{
-    int i;
-    if (y < 0 || y >= s->h)
-        return;
-    if (x0 > x1) {
-        int tmp = x0; x0 = x1; x1 = tmp;
-    }
-    if (x0 < 0) x0 = 0;
-    if (x1 >= s->w) x1 = s->w - 1;
-    for (i = x0; i <= x1; i++)
-        s->buf[y * s->pitch + i] = color;
-}
-
+/* Anti-aliased filled circle: full-coverage interior, ~1px blended rim.
+ * Same squared-distance coverage trick as aa_corner (no sqrt). */
 void draw_circle_filled(surface_t *s, int cx, int cy, int r, uint32_t color)
 {
-    int x = r, y = 0;
-    int d = 1 - r;
-
-    while (x >= y) {
-        draw_hline(s, cx - x, cx + x, cy + y, color);
-        draw_hline(s, cx - x, cx + x, cy - y, color);
-        draw_hline(s, cx - y, cx + y, cy + x, color);
-        draw_hline(s, cx - y, cx + y, cy - x, color);
-        y++;
-        if (d <= 0) {
-            d += 2 * y + 1;
-        } else {
-            x--;
-            d += 2 * (y - x) + 1;
+    if (r <= 0) {
+        draw_px(s, cx, cy, color);
+        return;
+    }
+    int in2  = (2 * r - 1) * (2 * r - 1);
+    int out2 = (2 * r + 1) * (2 * r + 1);
+    for (int dy = -r; dy <= r; dy++)
+        for (int dx = -r; dx <= r; dx++) {
+            int d2 = 4 * (dx * dx + dy * dy);
+            if (d2 >= out2)
+                continue;
+            if (d2 <= in2)
+                draw_px(s, cx + dx, cy + dy, color);
+            else
+                blend_px(s, cx + dx, cy + dy, color,
+                         255 * (out2 - d2) / (out2 - in2));
         }
+}
+
+/* Traffic-light window button: AA fill, a subtly darker rim, and an
+ * engraved symbol when sym != 0 (1 = close ×, 2 = minimize −, 3 = maximize
+ * zoom-triangles). Rim/symbol tones derive from `color`, so the dimmed
+ * unfocused grey works too. */
+void draw_traffic_light(surface_t *s, int cx, int cy, int r, uint32_t color,
+                        int sym)
+{
+    uint32_t rim = ((((color >> 16) & 0xFF) * 3 / 5) << 16) |
+                   ((((color >> 8)  & 0xFF) * 3 / 5) << 8)  |
+                    (((color        & 0xFF) * 3 / 5));
+    uint32_t ink = ((((color >> 16) & 0xFF) * 2 / 5) << 16) |
+                   ((((color >> 8)  & 0xFF) * 2 / 5) << 8)  |
+                    (((color        & 0xFF) * 2 / 5));
+    draw_circle_filled(s, cx, cy, r, color);
+    /* 1px AA rim: re-cover the edge band in the darker tone. */
+    {
+        int in2  = (2 * r - 2) * (2 * r - 2);
+        int mid2 = (2 * r - 1) * (2 * r - 1);
+        int out2 = (2 * r + 1) * (2 * r + 1);
+        for (int dy = -r; dy <= r; dy++)
+            for (int dx = -r; dx <= r; dx++) {
+                int d2 = 4 * (dx * dx + dy * dy);
+                if (d2 <= in2 || d2 >= out2)
+                    continue;
+                int a = d2 <= mid2
+                        ? 255 * (d2 - in2) / (mid2 - in2)
+                        : 255 * (out2 - d2) / (out2 - mid2);
+                blend_px(s, cx + dx, cy + dy, rim, a);
+            }
+    }
+    switch (sym) {
+    case 1:                                   /* close: × */
+        draw_line(s, cx - 3, cy - 3, cx + 3, cy + 3, ink);
+        draw_line(s, cx - 3, cy + 3, cx + 3, cy - 3, ink);
+        break;
+    case 2:                                   /* minimize: − */
+        draw_fill_rect(s, cx - 3, cy, 7, 1, ink);
+        break;
+    case 3:                                   /* maximize: outward zoom triangles */
+        for (int j = 0; j < 3; j++) {
+            draw_fill_rect(s, cx - 3, cy - 3 + j, 3 - j, 1, ink);
+            draw_fill_rect(s, cx + 3 - j, cy + 1 + j, j + 1, 1, ink);
+        }
+        break;
     }
 }
 
@@ -259,62 +334,11 @@ void draw_rounded_rect(surface_t *s, int x, int y, int w, int h,
     /* Right strip */
     draw_fill_rect(s, x + w - r, y + r, r, h - 2 * r, color);
 
-    /* Four corner quarter-circles */
-    {
-        int cx_tl = x + r, cy_tl = y + r;
-        int cx_tr = x + w - r - 1, cy_tr = y + r;
-        int cx_bl = x + r, cy_bl = y + h - r - 1;
-        int cx_br = x + w - r - 1, cy_br = y + h - r - 1;
-        int px = r, py = 0;
-        int d = 1 - r;
-
-        while (px >= py) {
-            /* Top-left corner */
-            draw_hline(s, cx_tl - px, cx_tl, cy_tl - py, color);
-            draw_hline(s, cx_tl - py, cx_tl, cy_tl - px, color);
-            /* Top-right corner */
-            draw_hline(s, cx_tr, cx_tr + px, cy_tr - py, color);
-            draw_hline(s, cx_tr, cx_tr + py, cy_tr - px, color);
-            /* Bottom-left corner */
-            draw_hline(s, cx_bl - px, cx_bl, cy_bl + py, color);
-            draw_hline(s, cx_bl - py, cx_bl, cy_bl + px, color);
-            /* Bottom-right corner */
-            draw_hline(s, cx_br, cx_br + px, cy_br + py, color);
-            draw_hline(s, cx_br, cx_br + py, cy_br + px, color);
-
-            py++;
-            if (d <= 0) {
-                d += 2 * py + 1;
-            } else {
-                px--;
-                d += 2 * (py - px) + 1;
-            }
-        }
-    }
-}
-
-/* Alpha-blended horizontal line (for rounded shadow) */
-static void blend_hline(surface_t *s, int x0, int x1, int y,
-                        uint32_t color, int alpha)
-{
-    if (y < 0 || y >= s->h) return;
-    if (x0 > x1) { int tmp = x0; x0 = x1; x1 = tmp; }
-    if (x0 < 0) x0 = 0;
-    if (x1 >= s->w) x1 = s->w - 1;
-    int inv = 255 - alpha;
-    uint32_t cr = (color >> 16) & 0xFF;
-    uint32_t cg = (color >> 8) & 0xFF;
-    uint32_t cb = color & 0xFF;
-    for (int i = x0; i <= x1; i++) {
-        uint32_t bg = s->buf[y * s->pitch + i];
-        uint32_t br = (bg >> 16) & 0xFF;
-        uint32_t bg2 = (bg >> 8) & 0xFF;
-        uint32_t bb = bg & 0xFF;
-        uint32_t r = (cr * (unsigned)alpha + br * (unsigned)inv) / 255;
-        uint32_t g = (cg * (unsigned)alpha + bg2 * (unsigned)inv) / 255;
-        uint32_t b = (cb * (unsigned)alpha + bb * (unsigned)inv) / 255;
-        s->buf[y * s->pitch + i] = (r << 16) | (g << 8) | b;
-    }
+    /* Four anti-aliased corner quarter-circles */
+    aa_corner(s, x,         y,         r, 1, 1, color, 255);
+    aa_corner(s, x + w - r, y,         r, 0, 1, color, 255);
+    aa_corner(s, x,         y + h - r, r, 1, 0, color, 255);
+    aa_corner(s, x + w - r, y + h - r, r, 0, 0, color, 255);
 }
 
 void draw_blend_rounded_rect(surface_t *s, int x, int y, int w, int h,
@@ -335,32 +359,11 @@ void draw_blend_rounded_rect(surface_t *s, int x, int y, int w, int h,
     /* Right strip */
     draw_blend_rect(s, x + w - r, y + r, r, h - 2 * r, color, alpha);
 
-    /* Quarter-circle corners — fill scanlines from the edge of the circle
-     * to the edge of the center column (x+r or x+w-r-1), avoiding overlap. */
-    int cx_tl = x + r, cy_tl = y + r;
-    int cx_tr = x + w - r - 1, cy_tr = y + r;
-    int cx_bl = x + r, cy_bl = y + h - r - 1;
-    int cx_br = x + w - r - 1, cy_br = y + h - r - 1;
-    int bx = r, by = 0, d = 1 - r;
-
-    while (bx >= by) {
-        /* Each hline goes from the circle edge to the column boundary.
-         * Top-left: rightward to cx_tl-1 (center column starts at cx_tl) */
-        blend_hline(s, cx_tl - bx, cx_tl - 1, cy_tl - by, color, alpha);
-        blend_hline(s, cx_tl - by, cx_tl - 1, cy_tl - bx, color, alpha);
-        /* Top-right: leftward from cx_tr+1 */
-        blend_hline(s, cx_tr + 1, cx_tr + bx, cy_tr - by, color, alpha);
-        blend_hline(s, cx_tr + 1, cx_tr + by, cy_tr - bx, color, alpha);
-        /* Bottom-left */
-        blend_hline(s, cx_bl - bx, cx_bl - 1, cy_bl + by, color, alpha);
-        blend_hline(s, cx_bl - by, cx_bl - 1, cy_bl + bx, color, alpha);
-        /* Bottom-right */
-        blend_hline(s, cx_br + 1, cx_br + bx, cy_br + by, color, alpha);
-        blend_hline(s, cx_br + 1, cx_br + by, cy_br + bx, color, alpha);
-        by++;
-        if (d <= 0) d += 2 * by + 1;
-        else { bx--; d += 2 * (by - bx) + 1; }
-    }
+    /* Anti-aliased corner blocks (arc coverage scales the fill alpha). */
+    aa_corner(s, x,         y,         r, 1, 1, color, alpha);
+    aa_corner(s, x + w - r, y,         r, 0, 1, color, alpha);
+    aa_corner(s, x,         y + h - r, r, 1, 0, color, alpha);
+    aa_corner(s, x + w - r, y + h - r, r, 0, 0, color, alpha);
 }
 
 void draw_blit_scaled(surface_t *dst, int dx, int dy, int dw, int dh,
@@ -403,6 +406,144 @@ void draw_text_center(surface_t *s, int x, int y, int w, const char *str,
     int offset = (w - text_w) / 2;
     if (offset < 0) offset = 0;
     draw_text(s, x + offset, y, str, fg, bg);
+}
+
+const char *glyph_text_elide(const char *src, int max_w, char *out, int outsz)
+{
+    if (!out || outsz <= 0) return out;
+    if (!src) { out[0] = '\0'; return out; }
+
+    /* Fits in pixels: copy only complete UTF-8 characters within the buffer. */
+    if (glyph_text_width(src) <= max_w) {
+        int i = 0;
+        while (src[i] && i < outsz - 1) { out[i] = src[i]; i++; }
+        while (i > 0 && ((unsigned char)src[i] & 0xC0) == 0x80) i--;
+        out[i] = '\0';
+        return out;
+    }
+
+    /* Grow a prefix one UTF-8 character at a time, keeping the longest whose
+     * "prefix…" still fits. O(n^2) in glyph_text_width, but UI strings are short.
+     * The 3-byte ellipsis + NUL must always fit in `out` (hence outsz - 4). */
+    static const char ELL[] = "\xe2\x80\xa6";  /* U+2026 … + NUL */
+    if (outsz < (int)sizeof(ELL) || glyph_text_width(ELL) > max_w) {
+        out[0] = '\0';
+        return out;
+    }
+    int best = 0, i = 0;
+    while (src[i] && i < outsz - 4) {
+        unsigned char c = (unsigned char)src[i];
+        int step = 1;
+        if (c >= 0xF0) step = 4; else if (c >= 0xE0) step = 3; else if (c >= 0xC0) step = 2;
+        if (step > outsz - 4 - i) break;
+        int j;
+        for (j = 0; j < step && src[i + j]; j++) out[i + j] = src[i + j];
+        if (j != step) break;
+        int len = i + j;
+        out[len] = ELL[0]; out[len + 1] = ELL[1]; out[len + 2] = ELL[2]; out[len + 3] = '\0';
+        if (glyph_text_width(out) <= max_w) { best = len; i = len; }
+        else break;
+    }
+    out[best] = ELL[0]; out[best + 1] = ELL[1]; out[best + 2] = ELL[2]; out[best + 3] = '\0';
+    return out;
+}
+
+void draw_text_ui_elided(surface_t *s, int x, int y, int max_w,
+                         const char *str, uint32_t fg)
+{
+    char buf[256];   /* UI labels; a string wider than this in px is elided anyway */
+    glyph_text_elide(str, max_w, buf, sizeof(buf));
+    draw_text_ui(s, x, y, buf, fg);
+}
+
+void glyph_focus_ring(surface_t *s, int x, int y, int w, int h, int r)
+{
+    /* Ring just OUTSIDE the control, radius grown to stay concentric. */
+    draw_rounded_outline(s, x - FOCUS_RING_W, y - FOCUS_RING_W,
+                         w + 2 * FOCUS_RING_W, h + 2 * FOCUS_RING_W,
+                         r + FOCUS_RING_W, FOCUS_RING_W, THEME_FOCUS);
+}
+
+void glyph_draw_button(surface_t *s, int x, int y, int w, int h,
+                       const char *label, glyph_widget_state_t state,
+                       int primary, int focused)
+{
+    uint32_t bg, fg;
+    if (state == GLYPH_WS_DISABLED) {
+        bg = THEME_SURFACE;
+        fg = THEME_TEXT_FAINT;
+    } else if (primary) {
+        /* Accent call-to-action; hover/pressed shift the accent shade. */
+        bg = (state == GLYPH_WS_PRESSED) ? THEME_ACCENT_ACTIVE
+           : (state == GLYPH_WS_HOVER || state == GLYPH_WS_SELECTED) ? THEME_ACCENT_HOVER
+           : THEME_ACCENT;
+        fg = THEME_TEXT_ON_ACCENT;
+    } else {
+        /* Neutral surface; hover lifts, pressed sinks, selected fills accent. */
+        bg = (state == GLYPH_WS_PRESSED) ? THEME_SURFACE
+           : (state == GLYPH_WS_HOVER)   ? THEME_HOVER
+           : (state == GLYPH_WS_SELECTED) ? THEME_SELECTION
+           : THEME_SURFACE_2;
+        fg = (state == GLYPH_WS_SELECTED) ? THEME_TEXT_ON_ACCENT : THEME_TEXT;
+    }
+    draw_rounded_rect(s, x, y, w, h, R_SM, bg);
+    int lw = glyph_text_width(label);
+    int lh = glyph_text_height();
+    draw_text_ui(s, x + (w - lw) / 2, y + (h - lh) / 2, label, fg);
+    if (focused)
+        glyph_focus_ring(s, x, y, w, h, R_SM);
+}
+
+void glyph_draw_toggle(surface_t *s, int x, int y, int w, int h,
+                       int on, glyph_widget_state_t state)
+{
+    int disabled = (state == GLYPH_WS_DISABLED);
+    uint32_t track = on ? (disabled ? THEME_SURFACE_2 : THEME_ACCENT)
+                        : (state == GLYPH_WS_HOVER ? THEME_HOVER : THEME_SURFACE_2);
+    draw_rounded_rect(s, x, y, w, h, h / 2, track);
+    if (!on)                          /* subtle edge on the off state */
+        draw_rounded_outline(s, x, y, w, h, h / 2, 1, THEME_BORDER);
+    int kr  = h / 2 - 3;              /* knob radius, inset from the track */
+    int kcy = y + h / 2;
+    int kcx = on ? (x + w - h / 2) : (x + h / 2);
+    uint32_t knob = disabled ? THEME_TEXT_FAINT
+                  : (on ? THEME_TEXT_ON_ACCENT : THEME_TEXT_DIM);
+    draw_circle_filled(s, kcx, kcy, kr, knob);
+}
+
+void glyph_draw_field(surface_t *s, int x, int y, int w, int h,
+                      const char *text, int focused, glyph_widget_state_t state)
+{
+    draw_rounded_rect(s, x, y, w, h, R_SM, THEME_INPUT_BG);
+    if (focused)
+        glyph_focus_ring(s, x, y, w, h, R_SM);
+    else
+        draw_rounded_outline(s, x, y, w, h, R_SM, 1, THEME_BORDER);
+    if (text && text[0]) {
+        char buf[256];
+        glyph_text_elide(text, w - 2 * SP_2, buf, sizeof buf);
+        int th = glyph_text_height();
+        draw_text_ui(s, x + SP_2, y + (h - th) / 2, buf,
+                     state == GLYPH_WS_DISABLED ? THEME_TEXT_FAINT : THEME_TEXT);
+    }
+}
+
+void glyph_draw_list_row(surface_t *s, int x, int y, int w, int h,
+                         const char *label, glyph_widget_state_t state)
+{
+    uint32_t fg = THEME_TEXT;
+    if (state == GLYPH_WS_SELECTED) {
+        draw_fill_rect(s, x, y, w, h, THEME_SELECTION);
+        fg = THEME_TEXT_ON_ACCENT;
+    } else if (state == GLYPH_WS_HOVER) {
+        draw_fill_rect(s, x, y, w, h, THEME_HOVER);
+    } else if (state == GLYPH_WS_DISABLED) {
+        fg = THEME_TEXT_FAINT;
+    }
+    char buf[256];
+    glyph_text_elide(label, w - 2 * SP_3, buf, sizeof buf);
+    int th = glyph_text_height();
+    draw_text_ui(s, x + SP_3, y + (h - th) / 2, buf, fg);
 }
 
 void draw_box_blur(surface_t *s, int x, int y, int w, int h, int radius)
@@ -547,27 +688,6 @@ void draw_blend_rect(surface_t *s, int x, int y, int w, int h,
     }
 }
 
-/* Is pixel (px,py) — given relative to a rect's top-left — inside a rounded
- * rectangle of size w x h with corner radius r? Used by the outline routine. */
-static int
-rr_inside(int px, int py, int w, int h, int r)
-{
-    if (px < 0 || py < 0 || px >= w || py >= h)
-        return 0;
-    if (r <= 0)
-        return 1;
-    if (r > w / 2) r = w / 2;
-    if (r > h / 2) r = h / 2;
-    int dx, dy;
-    if (px < r && py < r)             { dx = r - px;               dy = r - py; }
-    else if (px >= w - r && py < r)   { dx = px - (w - r - 1);     dy = r - py; }
-    else if (px < r && py >= h - r)   { dx = r - px;               dy = py - (h - r - 1); }
-    else if (px >= w - r && py >= h - r){ dx = px - (w - r - 1);   dy = py - (h - r - 1); }
-    else
-        return 1;   /* straight edges / center */
-    return dx * dx + dy * dy <= r * r;
-}
-
 void
 draw_rounded_outline(surface_t *s, int x, int y, int w, int h,
                      int r, int thickness, uint32_t color)
@@ -575,15 +695,51 @@ draw_rounded_outline(surface_t *s, int x, int y, int w, int h,
     if (w <= 0 || h <= 0)
         return;
     if (thickness < 1) thickness = 1;
-    for (int py = 0; py < h; py++) {
-        for (int px = 0; px < w; px++) {
-            int outer = rr_inside(px, py, w, h, r);
-            int inner = rr_inside(px - thickness, py - thickness,
-                                  w - 2 * thickness, h - 2 * thickness,
-                                  r - thickness);
-            if (outer && !inner)
-                draw_px(s, x + px, y + py, color);
-        }
+    if (r < 0) r = 0;
+    if (r > w / 2) r = w / 2;
+    if (r > h / 2) r = h / 2;
+
+    /* Straight edge runs between the corner blocks. */
+    draw_fill_rect(s, x + r, y, w - 2 * r, thickness, color);
+    draw_fill_rect(s, x + r, y + h - thickness, w - 2 * r, thickness, color);
+    draw_fill_rect(s, x, y + r, thickness, h - 2 * r, color);
+    draw_fill_rect(s, x + w - thickness, y + r, thickness, h - 2 * r, color);
+
+    /* AA ring in the four r×r corner blocks: per-pixel coverage of the
+     * outer arc minus coverage of the inner (deflated) arc. */
+    int ri = r - thickness;
+    int out2  = (2 * r + 1) * (2 * r + 1);
+    int oin2  = (2 * r - 1) * (2 * r - 1);
+    int iout2 = (2 * ri + 1) * (2 * ri + 1);
+    int iin2  = (2 * ri - 1) * (2 * ri - 1);
+    for (int c = 0; c < 4; c++) {
+        int left = (c & 1) == 0, top = c < 2;
+        int sx = left ? x : x + w - r;
+        int sy = top  ? y : y + h - r;
+        for (int j = 0; j < r; j++)
+            for (int i = 0; i < r; i++) {
+                int dx = left ? 2 * (i - r) + 1 : 2 * i + 1;
+                int dy = top  ? 2 * (j - r) + 1 : 2 * j + 1;
+                int d2 = dx * dx + dy * dy;
+                if (d2 >= out2)
+                    continue;
+                int cov = d2 <= oin2 ? 255
+                                     : 255 * (out2 - d2) / (out2 - oin2);
+                int cin;
+                if (ri <= 0) {
+                    int ii = left ? i : r - 1 - i;   /* distance from outer edge */
+                    int jj = top  ? j : r - 1 - j;
+                    cin = (ii >= thickness && jj >= thickness) ? 255 : 0;
+                }
+                else if (d2 <= iin2)
+                    cin = 255;
+                else if (d2 >= iout2)
+                    cin = 0;
+                else
+                    cin = 255 * (iout2 - d2) / (iout2 - iin2);
+                if (cov > cin)
+                    blend_px(s, sx + i, sy + j, color, cov - cin);
+            }
     }
 }
 

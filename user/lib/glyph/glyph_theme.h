@@ -49,11 +49,19 @@ typedef struct glyph_theme {
     int      night_light;     /* 1 = warm color cast on the output     */
     int      ntp_auto;        /* 1 = chronos may sync time (NTP)        */
 
+    /* Terminal preferences (consumed by lumen-terminal via glyph_term). */
+    int      term_scheme;     /* color scheme index (glyph_term built-ins) */
+    int      term_font_px;    /* cell font size in px (13/16/20)           */
+    int      term_cursor;     /* GLYPH_TERM_CURSOR_* (0 block/1 beam/2 ul) */
+    int      term_blink;      /* 1 = blinking cursor                       */
+    int      term_scrollback; /* history lines                             */
+
     /* Palette — derived from `light` (set by theme.c, never edited directly). */
     uint32_t bg, surface, surface_2, hover, input_bg;
     uint32_t desktop_top, desktop_bot;
     uint32_t border, border_strong;
     uint32_t text, text_dim, text_faint, text_on_accent;
+    uint32_t ok, warn, error;   /* semantic status — theme-aware (was fixed hex) */
 } glyph_theme_t;
 
 extern glyph_theme_t g_glyph_theme;
@@ -86,6 +94,11 @@ extern glyph_theme_t g_glyph_theme;
 #define THEME_ACCENT_HOVER  (g_glyph_theme.accent_hover)
 #define THEME_ACCENT_ACTIVE (g_glyph_theme.accent_active)
 #define THEME_SELECTION     (g_glyph_theme.accent)  /* selected row / tab / item */
+/* Keyboard-focus ring. A single semantic token + width so every widget draws the
+ * focus affordance identically (LoricaOS wants full keyboard nav). Accent-hued
+ * by default; kept a distinct name so it can diverge from the fill accent later
+ * without touching call sites. */
+#define THEME_FOCUS         (g_glyph_theme.accent)
 
 /* Runtime theme API (implemented in theme.c). */
 int         glyph_theme_load(void);            /* apply config; 1 if any applied */
@@ -118,15 +131,29 @@ int         glyph_theme_night_light(void);         /* 1 = warm cast            *
 void        glyph_theme_set_night_light(int on);
 int         glyph_theme_ntp_auto(void);            /* 1 = NTP sync allowed     */
 void        glyph_theme_set_ntp_auto(int on);
+/* Terminal prefs (lumen-terminal reads these live). */
+int         glyph_theme_term_scheme(void);
+void        glyph_theme_set_term_scheme(int idx);
+int         glyph_theme_term_font_px(void);
+void        glyph_theme_set_term_font_px(int px);
+int         glyph_theme_term_cursor(void);
+void        glyph_theme_set_term_cursor(int style);
+int         glyph_theme_term_blink(void);
+void        glyph_theme_set_term_blink(int on);
+int         glyph_theme_term_scrollback(void);
+void        glyph_theme_set_term_scrollback(int lines);
 
 /* Re-read the runtime prefs (not accent) from config + reapply the palette.
  * Lets a running compositor pick up Settings changes without a restart. */
 void        glyph_theme_reload_prefs(void);
 
-/* ── Status ──────────────────────────────────────────────────────────────── */
-#define THEME_OK            0x0030C85A  /* success                              */
-#define THEME_WARN          0x00E8B23E  /* warning                              */
-#define THEME_ERROR         0x00FF5F57  /* error (matches traffic-light red)     */
+/* ── Status ──────────────────────────────────────────────────────────────────
+ * Runtime (theme-aware): these used to be fixed dark-tuned hex, so success-green
+ * / warn-amber / error-red kept their dark values on the LIGHT palette where
+ * their contrast was weak. Now set per-theme by apply_palette(). */
+#define THEME_OK            (g_glyph_theme.ok)      /* success */
+#define THEME_WARN          (g_glyph_theme.warn)    /* warning */
+#define THEME_ERROR         (g_glyph_theme.error)   /* error   */
 
 /* ── Window traffic lights (macOS-canonical; keep exact) ─────────────────── */
 #define THEME_TL_RED        0x00FF5F57
@@ -149,6 +176,9 @@ void        glyph_theme_reload_prefs(void);
 #define R_SM   6   /* buttons, inputs, chips, checkboxes       */
 #define R_MD   10  /* cards, menus, modals, window corners     */
 #define R_LG   14  /* large surfaces                            */
+
+/* Focus-ring stroke width (paired with THEME_FOCUS). */
+#define FOCUS_RING_W 2
 
 /* ── Type scale (TTF point sizes; font auto-bakes any size) ──────────────── */
 #define TYPE_CAPTION  12  /* captions, secondary labels  */

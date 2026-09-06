@@ -53,7 +53,7 @@ glyph_rect_intersects(glyph_rect_t a, glyph_rect_t b)
 #define C_CHROME_ADMIN   0x00B0202A          /* admin-session titlebar (danger red) */
 #define C_CHROME_YELLOW  THEME_TL_YELLOW
 #define C_CHROME_GREEN   THEME_TL_GREEN
-#define C_CHROME_TL_DIM  0x00555E6E          /* unfocused traffic lights */
+#define C_CHROME_TL_DIM  0x004E525C          /* unfocused traffic lights */
 
 /* Traffic-light button spacing */
 #define BTN_RADIUS  7
@@ -115,6 +115,41 @@ glyph_window_create(const char *title, int client_w, int client_h)
     win->dirty_rect.h = win->surf_h;
 
     return win;
+}
+
+/* Resize the server-side surface (chrome + client copy) to a new client area.
+ * Reallocs surface.buf; on failure the old buffer is kept and 0 is returned.
+ * Callers update the client's shared buffer separately (proxy path). */
+int
+glyph_window_resize(glyph_window_t *win, int client_w, int client_h)
+{
+    if (!win || client_w < 1 || client_h < 1)
+        return 0;
+
+    int sw = client_w + 2 * BD_W + SH_OFF;
+    int sh = client_h + TB_H + 2 * BD_W + SH_OFF;
+    uint32_t *nb = calloc((unsigned)(sw * sh), sizeof(uint32_t));
+    if (!nb)
+        return 0;
+
+    free(win->surface.buf);
+    win->surface.buf   = nb;
+    win->client_w = client_w;
+    win->client_h = client_h;
+    win->surf_w   = sw;
+    win->surf_h   = sh;
+    win->surface.w     = sw;
+    win->surface.h     = sh;
+    win->surface.pitch = sw;
+
+    /* Invalidate the frosted-glass backdrop cache — footprint changed. */
+    free(win->blur_cache);
+    win->blur_cache = NULL;
+    win->blur_cache_valid = 0;
+
+    win->has_dirty   = 1;
+    win->dirty_rect  = (glyph_rect_t){ 0, 0, sw, sh };
+    return 1;
 }
 
 void
@@ -243,17 +278,16 @@ render_chrome(glyph_window_t *win)
     int btn_cy = (TB_H + BD_W) / 2;
     int btn_x = cx + CLOSE_BTN_X + BTN_RADIUS;
 
-    /* Focused windows show full-color lights; unfocused dim to grey (macOS). */
+    /* Focused windows show full-color lights with engraved symbols;
+     * unfocused dim to plain grey (macOS). */
     uint32_t tl_r = focused ? C_CHROME_RED    : C_CHROME_TL_DIM;
     uint32_t tl_y = focused ? C_CHROME_YELLOW : C_CHROME_TL_DIM;
     uint32_t tl_g = focused ? C_CHROME_GREEN  : C_CHROME_TL_DIM;
-    draw_circle_filled(s, btn_x, btn_cy, BTN_RADIUS, tl_r);
-    draw_circle_filled(s, btn_x + BTN_SPACING, btn_cy, BTN_RADIUS, tl_y);
-    draw_circle_filled(s, btn_x + BTN_SPACING * 2, btn_cy, BTN_RADIUS, tl_g);
-
-    /* X on close button when focused */
-    if (focused)
-        draw_text_t(s, btn_x - 3, btn_cy - FONT_H / 2, "x", 0x00401010);
+    draw_traffic_light(s, btn_x, btn_cy, BTN_RADIUS, tl_r, focused ? 1 : 0);
+    draw_traffic_light(s, btn_x + BTN_SPACING, btn_cy, BTN_RADIUS, tl_y,
+                       focused ? 2 : 0);
+    draw_traffic_light(s, btn_x + BTN_SPACING * 2, btn_cy, BTN_RADIUS, tl_g,
+                       focused ? 3 : 0);
 }
 
 void
