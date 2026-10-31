@@ -25,7 +25,7 @@ void db_set_path(const char *path)
 
 /* Create `path` and all missing parent directories (mkdir -p). Errors other
  * than EEXIST are ignored here; the caller's subsequent fopen surfaces a real
- * failure. Needed because HERALD_DB_DIR is several levels deep (/var/lib/...)
+ * failure. Needed because HERALD_DB_DIR is several levels deep (/etc/aegis/...)
  * and the parents may not exist on a fresh root. */
 static void
 mkdir_p(const char *path)

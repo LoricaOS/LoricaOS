@@ -37,3 +37,16 @@ cosmetic under Aegis and grants no authority by itself. On installed systems
 the installer sets your own user + admin passwords (the admin password may be
 separate, or default to your account password), and `adminpw` changes the
 admin credential later; the live defaults above apply only to the ISO.
+
+## Herald state
+
+Herald keeps its installed database, ownership lists, and recovery transaction
+under `/etc/aegis/herald`, where writes require INSTALL authority. Downloads and
+reverified repository lists remain under `/var/lib/herald`. The system-update
+marker lives at `/etc/aegis/update/pending`.
+
+Legacy `/var/lib/herald/{db,owners,transaction}` state is never imported or
+recovered: an unelevated uid-0 process could have forged it. Transition using a
+rebuilt image with its trusted package database; do not copy legacy metadata
+into the protected directory or resume a legacy transaction with the new client.
+System-release packages using the old update marker must also be rebuilt.

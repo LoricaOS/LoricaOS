@@ -643,8 +643,8 @@ main(void)
 
     diagnostics_init();
 
-    if (access("/var/lib/lorica-update/pending", F_OK) == 0 ||
-        access("/var/lib/herald/transaction/state", F_OK) == 0) {
+    if (access("/etc/aegis/update/pending", F_OK) == 0 ||
+        access("/etc/aegis/herald/transaction/state", F_OK) == 0) {
         static const char detail[] =
             "System update incomplete; run lorica-update to finish, or "
             "'herald recover rollback'";

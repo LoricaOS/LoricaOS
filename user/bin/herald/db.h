@@ -2,8 +2,9 @@
 #define HERALD_DB_H
 #include <stddef.h>
 
-#define HERALD_DB_DIR  "/var/lib/herald"
-#define HERALD_DB_PATH "/var/lib/herald/db"
+/* Package metadata authorizes system writes; uid ownership is not authority. */
+#define HERALD_DB_DIR  "/etc/aegis/herald"
+#define HERALD_DB_PATH HERALD_DB_DIR "/db"
 
 typedef struct {
     char id[64];

@@ -41,7 +41,7 @@
 #define HERALD_ANCHORS_FILE "/etc/aegis/anchors"
 #define SYS_INSTALL_COMMIT 516   /* kernel: reload cap policy + anchors, no reboot */
 
-static const char *staged_db = HERALD_TXN_STAGE "/var/lib/herald/db";
+static const char *staged_db = HERALD_TXN_STAGE HERALD_DB_PATH;
 
 /* ---- helpers ---------------------------------------------------------- */
 
@@ -310,8 +310,8 @@ static int owner_finish(int fd, const char *id)
     failed = fsync(fd) != 0;
     if (close(fd) != 0) failed = 1;
     if (failed ||
-        snprintf(rel, sizeof(rel), "var/lib/herald/owners/%s.list", id) >=
-            (int)sizeof(rel) || txn_stage_path(path, sizeof(path), rel) != 0)
+        snprintf(rel, sizeof(rel), HERALD_DB_DIR "/owners/%s.list", id) >=
+            (int)sizeof(rel) || txn_stage_path(path, sizeof(path), rel + 1) != 0)
         return -1;
     return txn_remove_stale(id, path);
 }
@@ -471,6 +471,12 @@ static int install_bytes(const unsigned char *buf, size_t len)
      * caps.d files take effect on the commit below; no anchor_register is needed
      * because the stack grants caps only under the builtin anchors /bin + /apps. */
     if (m.is_system) {
+        /* Legacy update markers cannot drive the protected recovery protocol. */
+        if (tar_find_mem(buf, len, "var/lib/lorica-update/pending", &md, &ms) == 1) {
+            fprintf(stderr, "herald: legacy system-update package requires a "
+                            "rebuilt release with protected update state\n");
+            return -1;
+        }
         owner_fd = txn_owner_open(m.id);
         if (owner_fd < 0) {
             fprintf(stderr, "herald: cannot create package file list\n");
@@ -1016,21 +1022,14 @@ static int cmd_remove(const char *id)
         return 1;
     }
 
-    /* Re-validate the db-stored exec basename before it goes into any path.
-     * manifest_parse rejects '/' in exec at install time, but the db file on
-     * disk (/var/lib/herald/db) is plain text and could be tampered between
-     * install and remove; db_load only length-bounds the field, it does not
-     * re-check for '/'. A doctored exec like "../../etc/aegis/caps.d/reboot"
-     * would otherwise let unlink() escape /apps/<id>/ and delete a system
-     * binary or cap policy. The id is already validated above (strchr at the
-     * top), so /apps/%s and the id segment are safe; only e.exec needs this. */
+    /* Validate persisted exec names before using the legacy removal paths. */
     if (!manifest_is_bare_name(e.exec)) {
         fprintf(stderr, "herald: refusing %s: database entry has a malformed "
                         "exec field '%s' (not a bare filename)\n", id, e.exec);
         return 1;
     }
 
-    snprintf(owner, sizeof(owner), "/var/lib/herald/owners/%s.list", id);
+    snprintf(owner, sizeof(owner), HERALD_DB_DIR "/owners/%s.list", id);
     if (access(owner, F_OK) == 0) {
         if (transaction_begin() != 0)
             return 1;

@@ -2,9 +2,11 @@
 #define HERALD_TRANSACTION_H
 
 #include <stddef.h>
+#include "db.h"
 
-#define HERALD_TXN_DIR   "/var/lib/herald/transaction"
+#define HERALD_TXN_DIR   HERALD_DB_DIR "/transaction"
 #define HERALD_TXN_STAGE HERALD_TXN_DIR "/stage"
+#define HERALD_UPDATE_PENDING "/etc/aegis/update/pending"
 
 /* One crash-recoverable root-filesystem transaction. Paths are relative to /. */
 int txn_recover(void);

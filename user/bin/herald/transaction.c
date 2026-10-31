@@ -225,13 +225,13 @@ int txn_recover(void)
     char state[32] = "";
     int rc = 0;
     if (!f) return errno == ENOENT ? 0 : -1;
-    fgets(state, sizeof(state), f);
+    if (!fgets(state, sizeof(state), f)) { fclose(f); return -1; }
     fclose(f);
     if (strncmp(state, "pending-kernel", 14) == 0)
         return 1;
     if (strncmp(state, "committed", 9) != 0 && rollback() != 0) rc = -1;
     if (strncmp(state, "committed", 9) == 0 &&
-        unlink("/var/lib/lorica-update/pending") != 0 && errno != ENOENT)
+        unlink(HERALD_UPDATE_PENDING) != 0 && errno != ENOENT)
         rc = -1;
     if (rc == 0 && remove_tree(HERALD_TXN_DIR) != 0) rc = -1;
     return rc;
@@ -242,11 +242,11 @@ int txn_finalize(void)
     FILE *f = fopen(TXN_STATE, "r");
     char state[32] = "";
     if (!f) return -1;
-    fgets(state, sizeof(state), f);
+    if (!fgets(state, sizeof(state), f)) { fclose(f); return -1; }
     fclose(f);
     if (strncmp(state, "pending-kernel", 14) != 0) return -1;
     if (write_state("committed") != 0) return -1;
-    if (unlink("/var/lib/lorica-update/pending") != 0 && errno != ENOENT)
+    if (unlink(HERALD_UPDATE_PENDING) != 0 && errno != ENOENT)
         return -1;
     sync();
     return remove_tree(HERALD_TXN_DIR);
@@ -268,7 +268,7 @@ int txn_begin(void)
     if (fd < 0 || fsync(fd) != 0 || close(fd) != 0) return -1;
     fd = open(TXN_DELETE, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0 || fsync(fd) != 0 || close(fd) != 0) return -1;
-    return txn_stage_existing("var/lib/herald/db");
+    return txn_stage_existing(HERALD_DB_PATH + 1);
 }
 
 void txn_abort(void)
@@ -290,8 +290,8 @@ int txn_owner_open(const char *id)
 {
     char rel[160], path[TXN_PATH_MAX];
     if (!id || !id[0] || strchr(id, '/') ||
-        snprintf(rel, sizeof(rel), "var/lib/herald/owners/%s.list", id) >= (int)sizeof(rel) ||
-        txn_stage_path(path, sizeof(path), rel) != 0 || parent_dirs(path) != 0)
+        snprintf(rel, sizeof(rel), HERALD_DB_DIR "/owners/%s.list", id) >= (int)sizeof(rel) ||
+        txn_stage_path(path, sizeof(path), rel + 1) != 0 || parent_dirs(path) != 0)
         return -1;
     return open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 }
@@ -333,7 +333,7 @@ int txn_remove_stale(const char *id, const char *new_owner_path)
     char old[TXN_PATH_MAX], line[TXN_PATH_MAX];
     FILE *of, *nf;
     if (!id || strchr(id, '/') || snprintf(old, sizeof(old),
-        "/var/lib/herald/owners/%s.list", id) >= (int)sizeof(old)) return -1;
+        HERALD_DB_DIR "/owners/%s.list", id) >= (int)sizeof(old)) return -1;
     of = fopen(old, "r");
     if (!of) return errno == ENOENT ? 0 : -1;
     nf = fopen(new_owner_path, "r");
@@ -353,7 +353,7 @@ int txn_remove_owned(const char *id)
     char old[TXN_PATH_MAX], line[TXN_PATH_MAX];
     FILE *f;
     if (!id || strchr(id, '/') || snprintf(old, sizeof(old),
-        "/var/lib/herald/owners/%s.list", id) >= (int)sizeof(old)) return -1;
+        HERALD_DB_DIR "/owners/%s.list", id) >= (int)sizeof(old)) return -1;
     /* ponytail: packages own files, not directories; empty directories may
      * remain after removal. Track directory ownership only if that matters. */
     f = fopen(old, "r");
@@ -372,7 +372,7 @@ int txn_commit(void)
     FILE *df;
     char line[TXN_PATH_MAX];
     int jfd, rc = -1;
-    int pending = access(HERALD_TXN_STAGE "/var/lib/lorica-update/pending", F_OK) == 0;
+    int pending = access(HERALD_TXN_STAGE HERALD_UPDATE_PENDING, F_OK) == 0;
     if (write_state("applying") != 0) return -1;
     jfd = open(TXN_JOURNAL, O_WRONLY | O_APPEND);
     if (jfd < 0) return -1;

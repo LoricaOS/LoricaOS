@@ -16,7 +16,7 @@
 #endif
 
 #define STAGED_KERNEL "/etc/aegis/update/aegis.elf"
-#define UPDATE_PENDING "/var/lib/lorica-update/pending"
+#define UPDATE_PENDING "/etc/aegis/update/pending"
 #define ESP_OFFSET    (1ULL * 1024 * 1024)
 #define ESP_SECTORS   16384U
 #define KERNEL_SLOT   (3U * 1024 * 1024)

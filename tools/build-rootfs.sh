@@ -221,8 +221,8 @@ fi
 # id<TAB>version<TAB>exec<TAB>sha256, one line per component + the desktop meta.
 # A server image skips this, so its `herald list` is empty.
 if [[ "$PROFILE" == desktop && -f build/pkgs/herald-db ]]; then
-    ensure_dir "/var/lib/herald"
-    debugfs_run "write build/pkgs/herald-db /var/lib/herald/db"
+    ensure_dir "/etc/aegis/herald"
+    debugfs_run "write build/pkgs/herald-db /etc/aegis/herald/db"
     echo "[rootfs] seeded herald db ($(grep -c . build/pkgs/herald-db) packages)"
 fi
 

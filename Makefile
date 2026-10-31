@@ -421,7 +421,7 @@ build/ffsmoke-media/clip.mp4:
 
 # No kernel in the rootfs image: the installed system boots the kernel from the
 # FAT ESP (boot():/boot/aegis.elf) — see the ESP rules above.
-$(ROOTFS_SERVER): $(MANIFEST_SRCS_BASE) $(SKELETON_FILES_BASE)
+$(ROOTFS_SERVER): rootfs.manifest tools/build-rootfs.sh $(MANIFEST_SRCS_BASE) $(SKELETON_FILES_BASE)
 	AEGIS_PROFILE=server bash tools/build-rootfs.sh $@
 
 # The desktop rootfs is ASSEMBLED from fetched component packages (the released

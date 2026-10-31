@@ -53,6 +53,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
 
@@ -194,6 +195,24 @@ main(int argc, char **argv)
     /* /etc/aegis (policy + anchors live here) must be install-protected too. */
     expect_denied("create-in-etc-aegis",
                   open("/etc/aegis/.captest_forge", O_CREAT | O_WRONLY, 0644));
+
+    /* Recovery inputs must remain INSTALL-gated even for the uid-0 owner. */
+    int dbfd = open("/etc/aegis/herald/db", O_RDONLY);
+    expect_allowed("herald-db-readable", dbfd >= 0 ? 0 : -1);
+    if (dbfd >= 0) close(dbfd);
+    expect_denied("herald-state-create",
+                  mkdir("/etc/aegis/herald/transaction", 0755));
+    expect_denied("herald-db-write",
+                  open("/etc/aegis/herald/db", O_WRONLY | O_APPEND));
+    expect_denied("herald-db-unlink", unlink("/etc/aegis/herald/db"));
+    expect_denied("herald-db-rename",
+                  rename("/etc/aegis/herald/db", "/home/live/.herald-db"));
+    expect_denied("herald-db-hardlink",
+                  link("/etc/aegis/herald/db", "/home/live/.herald-db"));
+    expect_denied("herald-state-symlink",
+                  symlink("/tmp", "/etc/aegis/herald/transaction"));
+    expect_denied("herald-pending-forge",
+                  open("/etc/aegis/update/pending", O_CREAT | O_WRONLY, 0644));
 
     /* FB: sys_fb_flush now requires CAP_KIND_FB (T1 cap-completeness fix). A
      * baseline process must not be able to drive scanout presentation. */

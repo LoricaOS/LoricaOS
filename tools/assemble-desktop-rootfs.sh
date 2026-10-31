@@ -76,8 +76,8 @@ rm -f "$tmpelf"
 
 # 3. Pre-seed the herald db (components + the desktop meta).
 if [ -f "$DB" ]; then
-    ensure_dir "/var/lib/herald"
-    write_file "$DB" "/var/lib/herald/db" 0100644
+    ensure_dir "/etc/aegis/herald"
+    write_file "$DB" "/etc/aegis/herald/db" 0100644
     echo "[assemble] seeded herald db ($(grep -c . "$DB") packages)"
 fi
 
