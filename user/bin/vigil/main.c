@@ -371,23 +371,29 @@ static void
 start_service(service_t *s)
 {
     if (s->pid > 0) return;
+    /* Independent fork children have no capabilities until exec. Prepare quiet
+     * output in the authorized parent; the child may only dup/close then exec.
+     * Do not close stdout and hope a later open or libc stdio repair fills it.
+     * Keep stderr, login and bastion interactive. No O_CLOEXEC here: open may
+     * return fd 1 if stdout was absent, and dup2(1, 1) would not clear that flag. */
+    int nullfd = -1;
+    if (s_quiet &&
+        strcmp(s->run_cmd, "/bin/login") != 0 &&
+        strcmp(s->run_cmd, "/bin/bastion") != 0) {
+        nullfd = open("/dev/null", O_WRONLY);
+        if (nullfd < 0) {
+            char detail[64];
+            snprintf(detail, sizeof(detail), "open /dev/null failed (errno=%d)", errno);
+            service_error(s, detail);
+            return;
+        }
+    }
+
     pid_t pid = fork();
     if (pid == 0) {
-        /* In quiet mode, point stdout at /dev/null for non-interactive
-         * services so daemon chatter doesn't pollute the serial stream
-         * (breaks test pattern matching).  Keep stderr open — services that
-         * need serial visibility (e.g. DHCP) can log via stderr/dprintf.
-         * MUST reopen, never just close(1): with fd 1 free the service's
-         * next open() lands on fd 1, and stdio flushes then write into that
-         * file (this corrupted a media file before the kernel enforced fd
-         * access modes).
-         * Heuristic: not /bin/login and not /bin/bastion (the two
-         * interactive auth services). */
-        if (s_quiet &&
-            strcmp(s->run_cmd, "/bin/login") != 0 &&
-            strcmp(s->run_cmd, "/bin/bastion") != 0) {
-            close(1);
-            open("/dev/null", O_WRONLY);   /* lowest free fd → becomes 1 */
+        if (nullfd >= 0) {
+            if (dup2(nullfd, STDOUT_FILENO) < 0) _exit(127);
+            if (nullfd != STDOUT_FILENO && close(nullfd) < 0) _exit(127);
         }
 
         /* Exec the binary directly when run_cmd is an absolute path — this
@@ -403,11 +409,13 @@ start_service(service_t *s)
         }
         _exit(127);
     }
+    int fork_errno = errno;
+    if (nullfd >= 0) close(nullfd);
     if (pid > 0) {
         s->pid = pid;
     } else if (pid < 0) {
         char detail[64];
-        snprintf(detail, sizeof(detail), "fork failed (errno=%d)", errno);
+        snprintf(detail, sizeof(detail), "fork failed (errno=%d)", fork_errno);
         service_error(s, detail);
     }
 }

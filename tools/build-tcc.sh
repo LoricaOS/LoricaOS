@@ -29,4 +29,4 @@ rm -rf "$OUT"
 make install DESTDIR="$OUT" prefix=/usr/local
 
 echo "[tcc] installed -> $OUT/usr/local (bin/tcc + lib/tcc runtime)"
-"$OUT/usr/local/bin/tcc" -v 2>&1 | head -1 || true
+"$OUT/usr/local/bin/tcc" -v 2>&1 || true

@@ -2,8 +2,8 @@
  *
  * LoricaOS has no ambient root: creating an account is a privileged action
  * that writes /etc/shadow (kernel gates any open of it on CAP_KIND_AUTH) and
- * chowns the new home (CAP_KIND_SETUID). caps.d/useradd is therefore admin
- * tier with AUTH + SETUID — it only works from an admin-elevated session.
+ * chowns the new home (CAP_KIND_SETUID + INSTALL). Authorization enters the
+ * allowlisted admin principal in place, not an inherited elevated shell.
  *
  * The primary user (uid 0) is created by the installer; useradd adds further
  * users, assigned the next free uid at/above 1000, each in a private group
@@ -106,6 +106,11 @@ static int append_line(const char *path, const char *line)
 
 int main(int argc, char **argv)
 {
+    if (argc > 1 && !strcmp(argv[1], "--admin-ready") &&
+        install_admin_enter("/bin/useradd", &argc, &argv, NULL) != 0) {
+        fprintf(stderr, "useradd: administrator authorization failed\n");
+        return 1;
+    }
     /* Restore cooked mode — stsh leaves the terminal raw. */
     struct termios cooked;
     if (tcgetattr(0, &cooked) == 0) {
@@ -143,14 +148,9 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* Creating an account is a privileged action, and the caps useradd needs
-     * (AUTH to write /etc/shadow, SETUID to chown the home) are granted to any
-     * *authenticated* session — not only an elevated one. LoricaOS has no
-     * ambient root, so gate on proving the admin credential: `login -elevate`
-     * verifies /etc/aegis/admin and elevates this process. Fails closed if the
-     * caller can't authenticate as admin. (This tool is on the trusted path in
-     * /bin, so a non-admin cannot tamper with the check.) */
-    if (install_elevate(NULL) < 0) {
+    /* The separate admin credential authorizes principal 0. This does not
+     * claim that a new account's own password authenticated that principal. */
+    if (install_admin_enter("/bin/useradd", &argc, &argv, NULL) != 0) {
         fprintf(stderr, "useradd: admin authorization required.\n");
         return 1;
     }
@@ -209,8 +209,11 @@ int main(int argc, char **argv)
     if (make_home) {
         char home[80];
         snprintf(home, sizeof(home), "/home/%s", username);
-        if (install_make_home(home, uid, uid) < 0)
-            fprintf(stderr, "useradd: warning: could not create %s\n", home);
+        if (install_make_home(home, uid, uid) < 0) {
+            fprintf(stderr, "useradd: could not provision %s; account files "
+                            "were written, repair the home before login\n", home);
+            goto out;
+        }
     }
 
     printf("useradd: created '%s' (uid %d)%s\n",

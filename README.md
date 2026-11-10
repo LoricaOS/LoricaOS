@@ -9,6 +9,23 @@ The Aegis kernel is consumed as a **versioned artifact**, not built here — Lor
 fetches `aegis-<KERNEL_VERSION>.elf` (see `tools/fetch-kernel.sh`). The OS version
 (`VERSION`) and the kernel version (`KERNEL_VERSION`) move independently.
 
+### Releasing against a new kernel
+
+`tools/kernel.sha256` pins `(version, asset, sha256)` and `fetch-kernel.sh` fails
+closed on any mismatch. So the order matters:
+
+1. Tag and publish the Aegis release first (`aegis.elf`, `aegis-arm64.elf`, and,
+   when the microVM bundle is cut, `aegis-microvm.elf`).
+2. Bump `KERNEL_VERSION` (and `MICROVM_KERNEL_VERSION` if that artifact moves).
+3. Record the hashes **of the published assets** — not of a local build. A CI
+   rebuild is not byte-identical to a local one, so a locally-derived hash will
+   make every downstream build fail closed:
+
+   ```sh
+   curl -fsSLO https://github.com/LoricaOS/Aegis/releases/download/v<KVER>/aegis.elf
+   sha256sum aegis.elf        # paste into tools/kernel.sha256
+   ```
+
 ## Build
 
 Requires `musl-gcc`, `nasm`-free userland toolchain, `xorriso`, `mtools`,
@@ -22,6 +39,35 @@ make clean
 ```
 
 To build offline, drop the kernel image at `vendor/aegis-<KERNEL_VERSION>.elf`.
+
+### Verified local kernel (x86-64 only)
+
+For an unpublished kernel, supply **both** an absolute artifact path and its
+trusted expected SHA-256 (obtained independently, not recomputed to bless an
+unknown artifact):
+
+```sh
+make server-iso LOCAL_KERNEL=/absolute/path/hardened.elf \
+    LOCAL_KERNEL_SHA256='<trusted-64-digit-sha256>'
+```
+
+The build checks the copied bytes and ELF64/x86-64 architecture before atomically
+replacing `build/aegis-stripped.elf`. This is the same canonical input used by the
+ISO, ESP, and `rootfs.manifest`'s `/etc/aegis/update/aegis.elf` payload; there is no
+second, unverified override. Missing/empty pairs, missing files, and mismatches
+stop the build without release fallback, even if an older destination exists.
+Every kernel build invocation revalidates and recopies the selected input, so
+downstream images rebuild too.
+
+Local provenance is recorded in `build/.kernel-local` (source and SHA-256), not
+in release pins or `build/.kernel-version`. It does not claim a published kernel
+version; `KERNEL_VERSION` remains the release default, not the local identity.
+Omit both overrides (and unset them if exported in your environment) to restore
+the checksum-locked release kernel on the next build, removing local provenance.
+This only selects an artifact: it does not build, publish, or sign a kernel, or
+establish that it boots. ARM/direct-script local support is not included.
+
+Host-only regression check: `bash tools/test-local-kernel.sh`.
 
 ## Live session credentials
 

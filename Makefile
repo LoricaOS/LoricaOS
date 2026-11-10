@@ -27,7 +27,10 @@ ROOTFS_DESKTOP = $(BUILD)/rootfs-desktop.img
 ROOTFS_SERVER  = $(BUILD)/rootfs-server.img
 
 # C++ cross toolchain (used by build/cpptest fixture; provisioned out-of-repo)
-CXX_AEGIS       = /opt/aegis-cxx/bin/x86_64-buildroot-linux-musl-g++
+CXX_TOOLCHAIN_PREFIX ?= /opt/aegis-cxx
+CXX_TOOLCHAIN_CACHE  ?= /opt/xtc
+export CXX_TOOLCHAIN_PREFIX CXX_TOOLCHAIN_CACHE
+CXX_AEGIS      ?= $(CXX_TOOLCHAIN_PREFIX)/bin/x86_64-buildroot-linux-musl-g++
 CXX_FLAGS_AEGIS = -static -O2 -std=c++23 -fno-pie -no-pie
 
 .PHONY: all iso desktop-iso desktop-dev-iso server-iso selftest-iso soak-iso ffsmoke-iso ffsmoke-test microvm-image rootfs build-musl test clean version curl_bin update-package update-test recovery-test
@@ -43,13 +46,22 @@ $(IWL_FW): tools/fetch-iwlwifi.sh
 	bash tools/fetch-iwlwifi.sh $@
 
 KERNEL_STRIPPED = $(BUILD)/aegis-stripped.elf
-# Prerequisites so a locally-dropped vendor/aegis-<ver>.elf (or a KERNEL_VERSION
-# bump) actually triggers a refetch/recopy — without these, once
-# build/aegis-stripped.elf exists once, make considers it satisfied forever
-# and silently keeps using a stale kernel no matter what changes underneath it.
-VENDOR_KERNEL := vendor/aegis-$(KERNEL_VERSION).elf
-$(KERNEL_STRIPPED): KERNEL_VERSION tools/kernel.sha256 $(wildcard $(VENDOR_KERNEL))
-	bash tools/fetch-kernel.sh $(KERNEL_VERSION) $@
+# Export only explicitly supplied overrides (including empty ones, which fail).
+# Environment transport preserves paths with spaces/quotes without shell eval.
+ifneq ($(origin LOCAL_KERNEL),undefined)
+export LOCAL_KERNEL
+endif
+ifneq ($(origin LOCAL_KERNEL_SHA256),undefined)
+export LOCAL_KERNEL_SHA256
+endif
+# Always verify and atomically recopy the selected artifact, even when the
+# destination exists. This also forces consumers (including the manifest's
+# update payload) to rebuild when switching inputs or returning to a release.
+# Mark the file target itself phony: equal/coarse timestamps must not let a
+# consumer retain old bytes after an otherwise successful kernel selection.
+.PHONY: $(KERNEL_STRIPPED)
+$(KERNEL_STRIPPED): KERNEL_VERSION tools/kernel.sha256 tools/fetch-kernel.sh
+	bash tools/fetch-kernel.sh "$(KERNEL_VERSION)" "$@"
 
 # ── User program builds ─��──────────────────────────────────���────────────────
 # musl shared library (dynamic linker)
@@ -81,6 +93,8 @@ user/bin/$(1)/$(1).elf: $$(MUSL_BUILT) $$(wildcard user/bin/$(1)/*.c) $$(wildcar
 	$$(MAKE) -C user/bin/$(1)
 endef
 $(foreach p,$(SIMPLE_USER_PROGS),$(eval $(call SIMPLE_USER_RULE,$(p))))
+
+user/bin/stsh/stsh.elf: user/lib/libinstall/admin_targets.h
 
 build/ffmpeg-install/lib/libavformat.a: tools/build-ffmpeg.sh tools/fetch-ffmpeg.sh
 	bash tools/build-ffmpeg.sh

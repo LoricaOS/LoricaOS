@@ -65,6 +65,8 @@ tokenize(const char *text, tok_t *toks, int maxtoks, char *arena, int arenalen)
 {
     int nt = 0, used = 0;
     const char *p = text;
+    struct { char delim[64]; int strip, token; } pending[MAX_REDIR];
+    int npending=0;
 
 #define OP(tt, adv) do { \
         if (nt >= maxtoks - 1) return -1; \
@@ -77,53 +79,66 @@ tokenize(const char *text, tok_t *toks, int maxtoks, char *arena, int arenalen)
         char c = *p;
 
         if (c == '#') { while (*p && *p != '\n') p++; continue; }  /* comment to EOL */
-        if (c == '\n') { OP(T_NEWLINE, 1); continue; }
+        if (c == '\n') {
+            /* Finish tokenizing the ENTIRE opening line before consuming bodies.
+             * Otherwise `<<END >out`, pipelines, '&', and later redirects
+             * disappear. Each placeholder retains its lexical redirect order. */
+            p++;
+            for (int h=0;h<npending;h++) {
+                int start=used, found=0;
+                while (*p) {
+                    const char *line=p;
+                    if (pending[h].strip) while (*line=='\t') line++;
+                    const char *end=line;
+                    while (*end && *end!='\n') end++;
+                    size_t len=end-line;
+                    if (len==strlen(pending[h].delim) &&
+                        !memcmp(line,pending[h].delim,len)) {
+                        p=*end ? end+1 : end; found=1; break;
+                    }
+                    size_t add=len+(*end=='\n');
+                    if (add>=(size_t)(arenalen-used)) return -1;
+                    memcpy(arena+used,line,len); used+=len;
+                    if (*end=='\n') arena[used++]='\n';
+                    p=*end ? end+1 : end;
+                }
+                if (!found || used>=arenalen) return -1;
+                arena[used++]='\0';
+                toks[pending[h].token].text=arena+start;
+            }
+            npending=0;
+            if (nt>=maxtoks-1) return -1;
+            toks[nt++]=(tok_t){T_NEWLINE,NULL};
+            continue;
+        }
         if (c == '|')  { if (p[1]=='|') OP(T_OR,2);   else OP(T_PIPE,1);  continue; }
         if (c == '&')  { if (p[1]=='&') OP(T_AND,2);  else OP(T_AMP,1);   continue; }
         if (c == ';')  { OP(T_SEMI,1);  continue; }
         if (c == '(')  { OP(T_LPAREN,1); continue; }
         if (c == ')')  { OP(T_RPAREN,1); continue; }
         if (c == '<' && p[1] == '<') {
-            /* heredoc: <<[-]DELIM \n body... \n DELIM. Emit T_DLESS then a
-             * T_WORD carrying the (literal) body. <<- strips leading tabs from
-             * body lines and the closing delimiter. Body is always literal —
-             * like <<'EOF' (no $-expansion); that's the ponytail ceiling. */
-            if (nt >= maxtoks - 1) return -1;
+            /* Defer body consumption until the opening newline. Bodies remain
+             * literal (no expansion); <<- strips leading tabs as before. */
+            if (nt>=maxtoks-2 || npending==MAX_REDIR) return -1;
             toks[nt].type = T_DLESS; toks[nt].text = NULL; nt++;
             p += 2;
             int strip = 0;
             if (*p == '-') { strip = 1; p++; }
             while (*p == ' ' || *p == '\t') p++;
-            char delim[64]; int dl = 0; char q = 0;
+            int dl=0; char q=0;
             if (*p == '\'' || *p == '"') { q = *p; p++; }
-            while (*p && dl < 63) {
-                if (q) { if (*p == q) { p++; break; } }
-                else if (*p==' '||*p=='\t'||*p=='\n') break;
-                delim[dl++] = *p++;
-            }
-            delim[dl] = '\0';
-            while (*p && *p != '\n') p++;      /* skip rest of the opening line */
-            if (*p == '\n') p++;
-            int bstart = used;
             while (*p) {
-                const char *ls = p;
-                if (strip) while (*ls == '\t') ls++;
-                const char *e = ls; while (*e && *e != '\n') e++;
-                if ((int)(e - ls) == dl && !strncmp(ls, delim, dl)) {
-                    p = (*e == '\n') ? e + 1 : e; break;   /* closing delimiter */
-                }
-                for (const char *s = ls; s < e && used < arenalen - 1; s++)
-                    arena[used++] = *s;
-                if (used < arenalen - 1) arena[used++] = '\n';
-                p = (*e == '\n') ? e + 1 : e;
+                if (q) { if (*p == q) { p++; break; } }
+                else if (*p==' '||*p=='\t'||*p=='\n'||strchr("|&;<>()",*p)) break;
+                if (*p=='\n' || dl==63) return -1;
+                pending[npending].delim[dl++]=*p++;
             }
-            if (used < arenalen - 1) arena[used++] = '\0';
-            if (nt >= maxtoks - 2) return -1;
-            toks[nt].type = T_WORD; toks[nt].text = &arena[bstart]; nt++;
-            /* The command ends at the opening line's newline (which we consumed
-             * while slurping the body); emit it so the next line is its own
-             * statement, not merged into this command's argv. */
-            toks[nt].type = T_NEWLINE; toks[nt].text = NULL; nt++;
+            if (!dl) return -1;
+            pending[npending].delim[dl]='\0';
+            pending[npending].strip=strip;
+            pending[npending].token=nt;
+            npending++;
+            toks[nt++]=(tok_t){T_WORD,NULL};
             continue;
         }
         if (c == '<')  { OP(T_LT,1); continue; }
@@ -141,6 +156,7 @@ tokenize(const char *text, tok_t *toks, int maxtoks, char *arena, int arenalen)
         if (used >= arenalen - 1) return -1;
     }
 #undef OP
+    if (npending) return -1;
     toks[nt].type = T_EOF;
     toks[nt].text = NULL;
     return nt;

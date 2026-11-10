@@ -8,14 +8,39 @@
 set -e
 
 REPO="${REPO:-$(git rev-parse --show-toplevel)}"
-SRC="$REPO/references/tinyssh"
 OUT="$REPO/build/tinyssh"
-TINYSSH_URL="https://github.com/janmojzis/tinyssh"
+TINYSSH_COMMIT="6a60c2aac18da9035a7401316789d6f4df7e295f"
+TINYSSH_SHA256="14cec5eaeab63a40322381f16ed4a9128e85419d6c60e7d0a2ffb81ef4226d87"
+TINYSSH_URL="https://codeload.github.com/janmojzis/tinyssh/tar.gz/$TINYSSH_COMMIT"
+ARCHIVE="$OUT/tinyssh-$TINYSSH_COMMIT.tar.gz"
 
-if [ ! -d "$SRC" ]; then
-    echo "[tinyssh] cloning $TINYSSH_URL ..."
-    git clone --depth 1 "$TINYSSH_URL" "$SRC"
+# Source reproducibility only: strict Aegis SSH authentication/session launch is
+# still blocked. See docs/tinyssh-strict-aegis.md before claiming SSH support.
+# Never reuse a mutable/patched references checkout. Verify even cached archives
+# and apply the compatibility patches to a fresh build-owned extraction.
+mkdir -p "$OUT"
+WORK="$(mktemp -d "$OUT/.source.XXXXXX")"
+trap 'rm -rf "$WORK"' EXIT
+INPUT="$ARCHIVE"
+if [ ! -f "$ARCHIVE" ]; then
+    INPUT="$WORK/source.tar.gz"
+    echo "[tinyssh] fetching $TINYSSH_COMMIT ..."
+    curl -fL --proto '=https' --tlsv1.2 "$TINYSSH_URL" -o "$INPUT"
 fi
+if command -v sha256sum >/dev/null 2>&1; then
+    ACTUAL="$(sha256sum "$INPUT")"
+else
+    ACTUAL="$(shasum -a 256 "$INPUT")"
+fi
+if [ "${ACTUAL%% *}" != "$TINYSSH_SHA256" ]; then
+    echo "[tinyssh] source checksum mismatch; refusing to extract or build" >&2
+    exit 1
+fi
+if [ "$INPUT" != "$ARCHIVE" ]; then
+    mv "$INPUT" "$ARCHIVE"
+fi
+tar -xzf "$ARCHIVE" -C "$WORK"
+SRC="$WORK/tinyssh-$TINYSSH_COMMIT"
 
 # Aegis has no fchdir(2) (a dir fd can't carry a path — vfs_file_t is fixed-size),
 # but getcwd/chdir work. Patch tinysshd's save-cwd / restore-cwd dance to use a

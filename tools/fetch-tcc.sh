@@ -11,7 +11,7 @@
 # linking against modern musl's libc.a requires; the mob branch handles it and
 # builds cleanly against musl with --config-musl.
 set -e
-REPO="$(git rev-parse --show-toplevel)"
+REPO="${REPO:-$(git rev-parse --show-toplevel)}"
 PIN="${TCC_COMMIT:-a338258}"
 SRC="$REPO/references/tinycc"
 

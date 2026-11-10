@@ -26,14 +26,7 @@ build_prompt(char *prompt, int len)
     }
 
     char suffix = has_cap_delegate() ? '#' : '$';
-    if (stsh_admin_active()) {
-        /* Elevated session: red prompt + a clear [admin] marker so it's obvious
-         * the shell can mutate the system (mirrors the Lumen red admin chrome). */
-        snprintf(prompt, len,
-                 "\033[1;31m[admin] %s@loricaos:%s#\033[0m ", user, display_path);
-    } else {
-        snprintf(prompt, len, "%s@loricaos:%s%c ", user, display_path, suffix);
-    }
+    snprintf(prompt, len, "%s@loricaos:%s%c ", user, display_path, suffix);
 }
 
 int
@@ -54,6 +47,15 @@ main(int argc, char **argv, char **envp)
     /* Initialize history (privileged = no disk persist) */
     hist_init(has_cap_delegate());
 
+    /* State is untrusted data, not a grant. Only a freshly exec'd interpreter
+     * enters this path; cap/admin caches above are initialized independently. */
+    if (argc==3 && !strcmp(argv[1],"--state-v1"))
+        return run_bootstrap(argv[2]);
+    if (argc>=2 && !strncmp(argv[1],"--state",7)) {
+        fprintf(stderr,"stsh: unsupported interpreter state invocation\n");
+        return 2;
+    }
+
     /* -c command mode: run the string. Per POSIX the first operand after the
      * command_string is $0, and the rest are $1.. */
     if (argc >= 3 && strcmp(argv[1], "-c") == 0) {
@@ -68,6 +70,23 @@ main(int argc, char **argv, char **envp)
      * (this is what makes stsh usable as /bin/sh for `#!` shebangs). */
     if (argc >= 2 && argv[1][0] != '-') {
         return run_script(argv[1], &argv[2], argc - 2);
+    }
+
+    g_jobcontrol=isatty(STDIN_FILENO);
+    /* A shell restoring its own group is temporarily in the background.
+     * Noninteractive/fresh interpreters never manipulate terminal ownership. */
+    if (g_jobcontrol) {
+        /* Keep job control descriptor-scoped even while a function/builtin
+         * temporarily redirects stdin. Children close this private duplicate. */
+        g_tty_fd=sh_save_fd(STDIN_FILENO);
+        if (g_tty_fd<0) { perror("stsh: controlling descriptor"); return 1; }
+        if (fcntl(g_tty_fd,F_SETFD,FD_CLOEXEC)<0) {
+            perror("stsh: controlling descriptor flags");
+            close(g_tty_fd); g_tty_fd=-1; return 1;
+        }
+        struct sigaction sa;
+        memset(&sa,0,sizeof sa); sa.sa_handler=SIG_IGN;
+        sigaction(SIGTTOU,&sa,NULL);
     }
 
     /* Display /etc/motd if it exists (login shell banner) */

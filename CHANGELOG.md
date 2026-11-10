@@ -1,5 +1,58 @@
 # LoricaOS Changelog
 
+## 1.7.0 — unreleased
+
+**No-ambient-authority release. Requires Aegis v1.6.0.** The kernel no longer
+gives an independent child its parent's capabilities, authentication, admin
+session or bound identity, so this release moves every place that relied on
+the inherited authority. Pins: `KERNEL_VERSION` and `MICROVM_KERNEL_VERSION`
+are both **1.6.0**; `tools/kernel.sha256` carries the 1.6.0 asset hashes.
+
+- **Launch:** Vigil opens `/dev/null` and shell redirections in the authorized
+  parent; the child only applies `dup`/`close` and execs. Heredocs are written
+  before the fork.
+- **Shells:** `stsh` runs substitutions, subshells and function pipelines in a
+  fresh `/bin/stsh --state-v1` interpreter that carries variables, functions,
+  positional parameters and `$?` — never capability or session state. Job
+  control uses `tcsetpgrp` on a persistent controlling descriptor instead of
+  the legacy `SYS_SETFG` (`SYS_SETFG` remains in the kernel, unused).
+- **Authentication:** text login verifies, binds, switches gid/uid and execs in
+  one process, failing closed on every step. Administrative commands
+  (`installer`, `gui-installer`, `useradd`, `adminpw`, `herald`,
+  `lorica-update`) re-execute themselves through `/bin/login --admin-exec`,
+  which verifies the separate admin credential, enters an explicit
+  administrative principal and execs the allowlisted target in place (Aegis
+  syscall **521**). Read-only herald commands do not prompt.
+- **Optional libc:** `posix_spawn` reports pre-exec failures through shared
+  memory across the suspended-parent `vfork` window instead of an error pipe a
+  capability-less child cannot write, so a bad file action or missing
+executable returns an error instead of hanging. Verified in-guest with 400
+  spawn cycles plus the ENOENT/ENOCAP/exit-127 cases (`vforkstress`).
+- **Image factory:** `/bin`, `/sbin` and `/apps` are precreated in every
+  profile so each granting anchor is install-protected; a baseline account can
+  no longer plant `/apps/gui-installer/gui-installer`.
+- **Kernel selection:** `LOCAL_KERNEL` + `LOCAL_KERNEL_SHA256` build against
+  an unpublished but checksum-verified artifact (release pins unchanged).
+
+Known limitations:
+
+- **SSH public-key login is not migrated.** TinySSH's un-execed helper
+  subprocesses (host-key signing, PTY readiness, authorized-keys lookup) assume
+  inherited authority; the source is now pinned and checksummed, but the port
+  needs a separately reviewed session/identity design. `sshd` listens; do not
+  rely on interactive SSH sessions.
+- **Standalone recovery image** still runs its binary as `/bin/vigil` with an
+  explicit disk grant and no trusted credential; its `--authorized` is a
+  control-flow marker. Not migrated.
+- **External components** (Bastion, Glyph, libcitadel) carry their own copies
+  of the auth wrappers and need their own releases; ordinary session identity
+  is unaffected, but their wrappers still ignore transition failures.
+- **Desktop packages** need the signing key to assemble a verified meta-package;
+  server images need nothing private.
+- **Console input:** very long command lines typed by a script can lose bytes
+  mid-line (the shell then waits for the rest of the line). Human-speed typing
+  is unaffected; `tools/migration-servertest.py` keeps its lines short.
+
 ## 1.6.2 — 2026-08-15 (RELEASED)
 
 **Desktop application compatibility release.** Lumen **v1.3.1** accepts and

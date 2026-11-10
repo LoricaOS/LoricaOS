@@ -193,8 +193,12 @@ out:
 
 /* ── Main ───────────────────────────────────────────────────────────── */
 
-int main(void)
+int main(int argc, char **argv)
 {
+    if (install_admin_enter("/bin/installer", &argc, &argv, NULL) != 0) {
+        fprintf(stderr, "installer: administrator authorization failed\n");
+        return 1;
+    }
     /* Restore cooked mode — stsh leaves the terminal in raw mode */
     struct termios cooked;
     tcgetattr(0, &cooked);
@@ -205,28 +209,6 @@ int main(void)
     printf("This will install LoricaOS to your NVMe disk.\n");
     printf("WARNING: All data on the disk will be destroyed!\n\n");
 
-    /* Raw whole-disk access (listing AND writing disks via sys_blkdev_*)
-     * requires an admin session (CAP_KIND_DISK_ADMIN). If this shell is
-     * already admin-elevated (red [admin] prompt) the disk-list probe
-     * succeeds and no re-authentication is needed; otherwise authenticate
-     * via /bin/login -elevate on the shared tty up front — before
-     * enumerating disks — or every block syscall returns ENOCAP. */
-    {
-        install_blkdev_t probe[1];
-        if (install_list_blkdevs(probe, 1) < 0) {
-            printf("--- Administrator authorization ---\n");
-            printf("Installing requires admin authorization.\n");
-            if (install_elevate(NULL) < 0) {
-                printf("\nERROR: admin authentication required to install.\n");
-                printf("Aborting — no changes were made.\n");
-                return 1;
-            }
-            printf("\n");
-        } else {
-            printf("Admin session detected — skipping re-authorization.\n\n");
-        }
-    }
-
     install_blkdev_t devs[8];
     int ndevs = install_list_blkdevs(devs, 8);
     if (ndevs < 0) {
@@ -234,7 +216,7 @@ int main(void)
          * process lacks CAP_KIND_DISK_ADMIN (admin elevation didn't take). Say so
          * plainly instead of the ambiguous "cannot enumerate" below. */
         printf("ERROR: admin capability (DISK_ADMIN) required to install.\n");
-        printf("Run the installer from an admin-elevated session.\n");
+        printf("Administrator authorization did not grant disk access.\n");
         printf("Aborting — no changes were made.\n");
         return 1;
     }

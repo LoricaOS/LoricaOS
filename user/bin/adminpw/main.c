@@ -1,23 +1,23 @@
 /* adminpw — change the admin-elevation credential (/etc/aegis/admin).
  *
  * LoricaOS has no root: admin actions are authorized by this separate
- * credential (verified by `login -elevate`), which the installer seeds
+ * credential (verified by `login --admin-exec`), which the installer seeds
  * from the account password unless a separate one was chosen. This tool
  * is the post-install way to change it.
  *
- * Flow mirrors the CLI installer's elevation model:
- *   1. Prompt for the CURRENT admin password and hand it to
- *      /bin/login -elevate (install_elevate), which verifies it and asks
- *      the kernel to elevate this process to an admin session. That
- *      re-derives our cap table from caps.d/adminpw (admin tier):
+ * Flow mirrors the CLI installer's in-place elevation model:
+ *   1. Reexec trusted login with a fixed adminpw target, verify the CURRENT
+ *      admin password, bind/switch to administrative principal 0, SELF-elevate,
+ *      then exec this tool in the same process. The kernel derives our caps:
  *      INSTALL because /etc/aegis/admin is an install-protected inode,
  *      AUTH because the kernel gates ANY open of the credential file on
  *      CAP_KIND_AUTH (it is shadow-grade sensitive).
  *   2. Prompt for the new password twice, hash (crypt SHA-512), rewrite
  *      the credential file, chmod 0600, sync.
  *
- * Running from an already-elevated [admin] shell still re-prompts for the
- * current password: changing the elevation credential always re-proves it.
+ * Ordinary invocation re-prompts even with live admin authority. The internal
+ * marker is a UX loop guard, not proof of reauthentication; already-authorized
+ * callers may forge it, but it never grants missing authority.
  */
 #include <stdio.h>
 #include <string.h>
@@ -60,8 +60,12 @@ static int read_password(const char *prompt, char *buf, int bufsz)
     return i;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    if (install_admin_enter("/bin/adminpw", &argc, &argv, NULL) != 0) {
+        fprintf(stderr, "adminpw: administrator authorization failed\n");
+        return 1;
+    }
     /* Restore cooked mode — stsh leaves the terminal raw. */
     struct termios cooked;
     if (tcgetattr(0, &cooked) == 0) {
@@ -75,21 +79,6 @@ int main(void)
     }
 
     printf("Change the admin password (authorizes admin actions).\n");
-
-    /* Verify the current credential AND elevate in one step: login -elevate
-     * reads the password from the pipe, checks it against the stored hash,
-     * and elevates this process (re-deriving caps.d/adminpw's admin-tier
-     * INSTALL cap, which the credential write below needs). */
-    {
-        char current[128];
-        read_password("Current admin password: ", current, sizeof(current));
-        int rc = install_elevate(current);
-        memset(current, 0, sizeof(current));
-        if (rc < 0) {
-            printf("adminpw: admin authentication failed\n");
-            return 1;
-        }
-    }
 
     char pw[128], confirm[128];
     if (read_password("New admin password: ", pw, sizeof(pw)) == 0) {
@@ -113,7 +102,7 @@ int main(void)
         return 1;
     }
 
-    int fd = open(ADMIN_CRED_FILE, O_WRONLY | O_CREAT | O_TRUNC);
+    int fd = open(ADMIN_CRED_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) {
         printf("adminpw: cannot write %s (admin capability missing?)\n",
                ADMIN_CRED_FILE);
@@ -126,8 +115,10 @@ int main(void)
         printf("adminpw: write failed\n");
         return 1;
     }
-    close(fd);
-    chmod(ADMIN_CRED_FILE, 0600);
+    if (close(fd) != 0 || chmod(ADMIN_CRED_FILE, 0600) != 0) {
+        printf("adminpw: credential finalization failed\n");
+        return 1;
+    }
     sync();
 
     printf("Admin password changed.\n");

@@ -13,17 +13,42 @@
 #include <fcntl.h>
 #include <time.h>
 #include <sys/syscall.h>
+#include <crypt.h>
+#include <errno.h>
+#include <limits.h>
 
 /* ---- passwd/shadow lookup --------------------------------------------- */
+
+static int parse_identity(const char *s, int *out)
+{
+    char *end;
+    if (!s || !s[0] || s[0] == '-' || s[0] == '+')
+        return -1;
+    for (const char *p = s; *p; p++)
+        if (*p < '0' || *p > '9') return -1;
+    errno = 0;
+    long n = strtol(s, &end, 10);
+    if (errno || *end || n > INT_MAX)
+        return -1;
+    *out = (int)n;
+    return 0;
+}
 
 int
 auth_lookup_passwd(const char *username, int *uid, int *gid,
                    char *home, int homelen, char *shell, int shelllen)
 {
+    if (!username || !uid || !gid || !home || homelen <= 0 ||
+        !shell || shelllen <= 0)
+        return -1;
     FILE *fp = fopen("/etc/passwd", "r");
     if (!fp) return -1;
     char line[256];
     while (fgets(line, sizeof(line), fp)) {
+        if (!strchr(line, '\n') && !feof(fp)) {
+            fclose(fp);
+            return -1; /* never authenticate a truncated passwd entry */
+        }
         char *fields[7];
         char *p = line, *q;
         int f = 0;
@@ -39,8 +64,14 @@ auth_lookup_passwd(const char *username, int *uid, int *gid,
         }
         if (f < 7) continue;
         if (strcmp(fields[0], username) != 0) continue;
-        *uid = atoi(fields[2]);
-        *gid = atoi(fields[3]);
+        if (parse_identity(fields[2], uid) != 0 ||
+            parse_identity(fields[3], gid) != 0 ||
+            fields[5][0] != '/' || fields[6][0] != '/' ||
+            strlen(fields[5]) >= (size_t)homelen ||
+            strlen(fields[6]) >= (size_t)shelllen) {
+            fclose(fp);
+            return -1;
+        }
         strncpy(home,  fields[5], (size_t)homelen  - 1); home[homelen-1]  = '\0';
         strncpy(shell, fields[6], (size_t)shelllen - 1); shell[shelllen-1] = '\0';
         fclose(fp);
@@ -53,6 +84,8 @@ auth_lookup_passwd(const char *username, int *uid, int *gid,
 int
 auth_lookup_shadow(const char *username, char *hash, int hashlen)
 {
+    if (!username || !hash || hashlen <= 0)
+        return -1;
     /* Scan /etc/shadow line-by-line rather than slurping it into a fixed buffer.
      * The old 2048-byte read silently truncated the file past ~19 SHA-512
      * accounts, so trailing users could not log in with a correct password (and
@@ -72,6 +105,10 @@ auth_lookup_shadow(const char *username, char *hash, int hashlen)
         char *h = colon + 1;
         char *hend = strchr(h, ':');
         if (hend) *hend = '\0';
+        if ((!nl && !hend) || strlen(h) >= (size_t)hashlen) {
+            fclose(fp);
+            return -1;
+        }
         strncpy(hash, h, (size_t)hashlen - 1);
         hash[hashlen - 1] = '\0';
         fclose(fp);
@@ -86,8 +123,10 @@ auth_lookup_shadow(const char *username, char *hash, int hashlen)
 int
 auth_verify(const char *password, const char *hash)
 {
+    if (!password || !hash || !hash[0] || hash[0] == '!' || hash[0] == '*')
+        return -1;
     char *computed = crypt(password, hash);
-    if (!computed || strcmp(computed, hash) != 0)
+    if (!computed || computed[0] == '*' || strcmp(computed, hash) != 0)
         return -1;
     return 0;
 }
@@ -107,11 +146,14 @@ auth_check(const char *username, const char *password,
 
 /* ---- identity + caps -------------------------------------------------- */
 
-void
+int
 auth_set_identity(int uid, int gid)
 {
-    syscall(105, (long)uid);  /* sys_setuid */
-    syscall(106, (long)gid);  /* sys_setgid */
+    /* Binding and both switches must belong to this same process. Change the
+     * group first; do not attempt the uid switch if that failed. */
+    if (uid < 0 || gid < 0 || syscall(106, (long)gid) != 0)
+        return -1;
+    return syscall(105, (long)uid) == 0 ? 0 : -1;
 }
 
 void
@@ -126,10 +168,12 @@ auth_grant_shell_caps(void)
      * libauth / libcitadel need not change in lockstep. */
 }
 
-void
+int
 auth_elevate_session(int uid, int gid)
 {
     /* sys_auth_session — marks session authenticated AND binds (uid, gid) as
      * the only identity a later setuid/setgid may assume. */
-    syscall(364, (long)uid, (long)gid);
+    if (uid < 0 || gid < 0)
+        return -1;
+    return syscall(364, (long)uid, (long)gid) == 0 ? 0 : -1;
 }

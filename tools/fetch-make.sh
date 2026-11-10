@@ -3,7 +3,7 @@
 # make is built static-musl (tools/build-make.sh) as an on-device build driver
 # for self-hosting. See the self-hosting roadmap.
 set -e
-REPO="$(git rev-parse --show-toplevel)"
+REPO="${REPO:-$(git rev-parse --show-toplevel)}"
 VER="${MAKE_VERSION:-4.4}"
 URL="https://ftp.gnu.org/gnu/make/make-${VER}.tar.gz"
 TMP="/tmp/make-${VER}.tar.gz"

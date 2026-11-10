@@ -23,6 +23,7 @@
 #include "font.h"
 
 #include "libinstall.h"
+#include "admin_targets.h"
 
 #define SYS_REBOOT  169
 
@@ -650,27 +651,32 @@ static void draw_screen_progress(void)
 static void handle_key_welcome(char c)
 {
     if (c == '\n' || c == '\r') {
-        /* Authorize disk access via login -elevate (fed the typed admin
-         * password over a pipe). Only advance to the disk screen on success
-         * — without an admin session the disk list comes back empty. */
-        if (install_elevate(g_st.admin_pw) < 0) {
-            snprintf(g_st.validation_error, sizeof(g_st.validation_error),
-                     "Admin authentication failed — check the password.");
-            dprintf(2, "[INSTALLER] elevate failed\n");
-            /* Clear the field so a retry starts clean (a startup focus race
-             * with the lumen-probe window can deliver a partial password). */
+        /* Back from Disk does not drop authority. Check the kernel again
+         * before tearing down a live window or attempting another reexec. */
+        int ready = install_admin_ready(ADMIN_GUI_INSTALLER_TARGET);
+        if (ready < 0) {
+            dprintf(2, "gui-installer: cannot query administrator authority\n");
+            _exit(1);
+        }
+        if (ready) {
             memset(g_st.admin_pw, 0, sizeof(g_st.admin_pw));
+            g_st.screen = SCREEN_DISK;
             g_st.dirty = 1;
+            dprintf(2, "[INSTALLER] screen=2\n");
             return;
         }
-        g_st.validation_error[0] = '\0';
-        dprintf(2, "[INSTALLER] elevated\n");
-        /* Elevation consumed the admin password; don't keep it in memory. */
+        /* Reexec through trusted login before disk selection, retaining no
+         * old compositor IPC state. The password travels only on a private FD.
+         * Failure terminates; no caller-controlled marker authorizes a retry. */
+        lumen_window_destroy(g_st.lwin);
+        close(g_st.lfd);
+        char *args[] = { "gui-installer", NULL };
+        char **av = args;
+        int ac = 1;
+        int rc = install_admin_enter(ADMIN_GUI_INSTALLER_TARGET, &ac, &av, g_st.admin_pw);
         memset(g_st.admin_pw, 0, sizeof(g_st.admin_pw));
-        g_st.screen = SCREEN_DISK;
-        dprintf(2, "[INSTALLER] screen=2\n");
-        g_st.dirty = 1;
-        return;
+        dprintf(2, "gui-installer: administrator reexec failed (%d)\n", rc);
+        _exit(1);
     }
     /* Edit the admin-password field. */
     int len = (int)strlen(g_st.admin_pw);
@@ -897,7 +903,17 @@ static void handle_mouse_click(int x, int y)
 int
 main(int argc, char **argv)
 {
-    (void)argc; (void)argv;
+    int ready = install_admin_ready(ADMIN_GUI_INSTALLER_TARGET);
+    if (ready < 0) {
+        dprintf(2, "gui-installer: cannot query administrator authority\n");
+        return 1;
+    }
+    if (argc > 1 && !strcmp(argv[1], "--admin-ready")) {
+        if (install_admin_enter(ADMIN_GUI_INSTALLER_TARGET, &argc, &argv, NULL) != 0) {
+            dprintf(2, "gui-installer: administrator authorization failed\n");
+            return 1;
+        }
+    }
 
     /* Connect to Lumen compositor (retries on ECONNREFUSED). */
     g_st.lfd = lumen_connect_retry();
@@ -931,7 +947,7 @@ main(int argc, char **argv)
     sigaction(SIGTERM, &sa, NULL);
 
     /* Initial state */
-    g_st.screen = SCREEN_WELCOME;
+    g_st.screen = ready ? SCREEN_DISK : SCREEN_WELCOME;
     g_st.dirty = 1;
     g_st.selected_disk = -1;
     g_st.encrypt_root = 1;
@@ -939,7 +955,7 @@ main(int argc, char **argv)
     /* Paint first frame and emit readiness marker. */
     render_current_screen();
     dprintf(2, "[LUMEN] installer ready\n");
-    dprintf(2, "[INSTALLER] screen=1\n");
+    dprintf(2, "[INSTALLER] screen=%d\n", ready ? 2 : 1);
 
     /* Event loop */
     while (!s_term_requested) {

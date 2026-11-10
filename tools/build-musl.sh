@@ -14,70 +14,76 @@ set -euo pipefail
 MUSL_VER=1.2.5
 MUSL_URL="https://musl.libc.org/releases/musl-${MUSL_VER}.tar.gz"
 MUSL_TAR="references/musl-${MUSL_VER}.tar.gz"
-MUSL_SRC="references/musl-${MUSL_VER}"
+MUSL_SRC="build/musl-aegis-source/musl-${MUSL_VER}"
 DESTDIR="$(pwd)/build/musl-dynamic"
+PATCH_HELPER="tools/patch-musl-aegis.py"
+# Hash the full recipe, including the exact-source patch helper. A libc built
+# before this migration (no stamp), or with any different patch, must rebuild.
+RECIPE_ID="$(python3 - "$0" "$PATCH_HELPER" <<'PY'
+import hashlib
+from pathlib import Path
+import sys
+h = hashlib.sha256()
+for name in sys.argv[1:]:
+    h.update(Path(name).read_bytes())
+    h.update(b'\0')
+print(h.hexdigest())
+PY
+)"
+STAMP="${DESTDIR}/.aegis-recipe"
 
-# Skip if already built AND correct architecture
+# Skip only a successful build of this exact recipe AND correct architecture.
 if [ -f "${DESTDIR}/usr/lib/libc.so" ]; then
-    if file "${DESTDIR}/usr/lib/libc.so" | grep -q "x86-64"; then
-        echo "[build-musl] libc.so already exists (x86-64), skipping."
+    if file "${DESTDIR}/usr/lib/libc.so" | grep -q "x86-64" &&
+       [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$RECIPE_ID" ]; then
+        echo "[build-musl] libc.so already exists (x86-64, matching Aegis recipe), skipping."
         exit 0
-    else
-        echo "[build-musl] WARNING: libc.so exists but is NOT x86-64 — rebuilding!"
-        rm -rf "${DESTDIR}"
     fi
+    echo "[build-musl] Architecture or Aegis recipe changed — rebuilding!"
 fi
 
-# Download if absent
-if [ ! -d "${MUSL_SRC}" ]; then
-    mkdir -p references
-    if [ ! -f "${MUSL_TAR}" ]; then
-        echo "[build-musl] Downloading musl ${MUSL_VER}..."
-        curl -L -o "${MUSL_TAR}" "${MUSL_URL}"
-    fi
-    echo "[build-musl] Extracting..."
-    tar -xzf "${MUSL_TAR}" -C references/
+# Download if absent. Never trust an existing extracted tree or unchecked tar.
+mkdir -p references
+if [ ! -f "${MUSL_TAR}" ]; then
+    echo "[build-musl] Downloading musl ${MUSL_VER}..."
+    curl -fL -o "${MUSL_TAR}.tmp" "${MUSL_URL}"
+    mv "${MUSL_TAR}.tmp" "${MUSL_TAR}"
 fi
+python3 - "$MUSL_TAR" "$PATCH_HELPER" <<'PY'
+import hashlib
+from pathlib import Path
+import runpy
+import sys
+expected = runpy.run_path(sys.argv[2])["TARBALL_SHA256"]
+if hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest() != expected:
+    sys.exit("[build-musl] musl 1.2.5 tarball SHA256 mismatch")
+PY
 
-# Aegis fix (#66): musl's res_msend.c mtime() uses CLOCK_REALTIME for its DNS
-# retry/timeout math (unsigned millisecond deltas). Aegis CLOCK_REALTIME carries an
-# NTP/RTC-settable epoch offset that can jump BACKWARD (clock sync / RTC seed),
-# underflowing those deltas and stalling/flaking the resolver. CLOCK_MONOTONIC
-# (raw PIT ticks — never jumps; kernel sys_clock_gettime clk_id=1) is the correct
-# source for an interval timer. mtime() is the only CLOCK_REALTIME user in this file.
-# Applied every build and idempotent (no-op once patched) so it also catches an
-# already-extracted source tree persisted under references/ (which `git clean
-# -fdx --exclude=references` keeps across nuclear rebuilds).
-RES_MSEND="${MUSL_SRC}/src/network/res_msend.c"
-if [ -f "${RES_MSEND}" ] && grep -q 'CLOCK_REALTIME' "${RES_MSEND}"; then
-    echo "[build-musl] Patching res_msend.c CLOCK_REALTIME -> CLOCK_MONOTONIC (Aegis #66)..."
-    sed -i 's/CLOCK_REALTIME/CLOCK_MONOTONIC/g' "${RES_MSEND}"
-fi
+# Re-extract on recipe changes: stale objects/configuration and old patch output
+# must not survive. Leave any references/musl-* tree alone (not a build input).
+rm -rf build/musl-aegis-source
+mkdir -p build/musl-aegis-source
+tar -xzf "${MUSL_TAR}" -C build/musl-aegis-source/
+python3 "$PATCH_HELPER" "${MUSL_SRC}"
+# Keep the old installation if source verification fails, but remove it before
+# installing so stale libraries cannot survive. No stamp until every step passes.
+rm -rf "${DESTDIR}"
 
-# Configure — nuke stale config.mak if it targets the wrong architecture
+# Configure the fresh, patched source.
 cd "${MUSL_SRC}"
-if [ -f config.mak ]; then
-    if ! grep -q 'ARCH = x86_64' config.mak; then
-        echo "[build-musl] WARNING: config.mak targets wrong arch — reconfiguring!"
-        rm -f config.mak
-        rm -rf obj lib
-    fi
-fi
-if [ ! -f config.mak ]; then
-    echo "[build-musl] Configuring..."
-    # -march=x86-64: pin the baseline x86-64 ISA (SSE2 only). Without it the
-    # build inherits the host gcc's default -march, so building on a modern box
-    # (e.g. a Zen4 workstation with -march=native) bakes AVX/AVX-512 into libc —
-    # binaries that then #UD on any older or emulated target, notably the
-    # microVM's baseline CPU. Pinning here makes the userland portable
-    # regardless of build host. Raise to x86-64-v2/v3 only if every target CPU
-    # (including the microVM's) is guaranteed to support it.
-    ./configure \
-        --prefix=/usr \
-        --syslibdir=/lib \
-        --enable-shared \
-        CFLAGS="-O2 -fno-pie -march=x86-64"
-fi
+echo "[build-musl] Configuring..."
+# -march=x86-64: pin the baseline x86-64 ISA (SSE2 only). Without it the
+# build inherits the host gcc's default -march, so building on a modern box
+# (e.g. a Zen4 workstation with -march=native) bakes AVX/AVX-512 into libc —
+# binaries that then #UD on any older or emulated target, notably the
+# microVM's baseline CPU. Pinning here makes the userland portable
+# regardless of build host. Raise to x86-64-v2/v3 only if every target CPU
+# (including the microVM's) is guaranteed to support it.
+./configure \
+    --prefix=/usr \
+    --syslibdir=/lib \
+    --enable-shared \
+    CFLAGS="-O2 -fno-pie -march=x86-64"
 
 # Build
 echo "[build-musl] Building..."
@@ -112,4 +118,5 @@ exec "\${REALGCC:-gcc}" -march=x86-64 "\$@" -specs "${SPECS}"
 WEOF
 chmod +x "$WRAPPER"
 
+printf '%s\n' "$RECIPE_ID" > "$STAMP"
 echo "[build-musl] Done. libc.so at ${DESTDIR}/usr/lib/libc.so"

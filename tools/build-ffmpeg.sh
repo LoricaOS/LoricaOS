@@ -7,7 +7,7 @@
 # Cross-parametrizable like build-curl.sh: set CC/ARCH/STRIP/SUFFIX for arm64
 # (CC=<aarch64 musl gcc> ARCH=aarch64 SUFFIX=-arm64). x86 asm needs nasm.
 # Install lands in build/ffmpeg-install${SUFFIX}/{lib,include}.
-set -e
+set -euo pipefail
 
 REPO="${REPO:-$(git rev-parse --show-toplevel)}"
 CC="${CC:-musl-gcc}"
@@ -54,7 +54,7 @@ cd "$BUILD_DIR"
   --enable-demuxer=mov,matroska,avi,mpegts \
   --enable-protocol=file
 
-make -j"$(nproc)" 2>&1 | tail -3
+make -j"${JOBS:-$(nproc)}"
 make install >/dev/null
 
 echo "[ffmpeg] installed: $OUT"

@@ -1,7 +1,7 @@
 #!/bin/bash
 # tools/fetch-bearssl.sh — fetch BearSSL 0.6 source tarball
 set -e
-REPO="$(git rev-parse --show-toplevel)"
+REPO="${REPO:-$(git rev-parse --show-toplevel)}"
 URL="https://bearssl.org/bearssl-0.6.tar.gz"
 TMP="/tmp/bearssl-0.6.tar.gz"
 

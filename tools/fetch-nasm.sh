@@ -3,7 +3,7 @@
 # NASM assembles the x86_64 kernel's *.asm; built static-musl (build-nasm.sh) it
 # runs on Aegis, part of the on-device kernel toolchain. See self-hosting roadmap.
 set -e
-REPO="$(git rev-parse --show-toplevel)"
+REPO="${REPO:-$(git rev-parse --show-toplevel)}"
 VER="${NASM_VERSION:-2.16.03}"
 URL="https://www.nasm.us/pub/nasm/releasebuilds/${VER}/nasm-${VER}.tar.gz"
 TMP="/tmp/nasm-${VER}.tar.gz"

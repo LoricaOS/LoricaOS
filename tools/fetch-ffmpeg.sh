@@ -3,7 +3,7 @@
 # FFmpeg is built as trimmed static decode libs by tools/build-ffmpeg.sh for the
 # lumen-video player (libavformat/avcodec/swscale/swresample/avutil only).
 set -e
-REPO="$(git rev-parse --show-toplevel)"
+REPO="${REPO:-$(git rev-parse --show-toplevel)}"
 VER="${FFMPEG_VERSION:-6.1.2}"
 URL="https://ffmpeg.org/releases/ffmpeg-${VER}.tar.xz"
 TMP="/tmp/ffmpeg-${VER}.tar.xz"
@@ -13,7 +13,7 @@ if [ -f "$REPO/references/ffmpeg/configure" ]; then
     exit 0
 fi
 
-wget -O "$TMP" "$URL"
+curl -fL --retry 2 --connect-timeout 20 --max-time 600 -o "$TMP" "$URL"
 mkdir -p "$REPO/references"
 cd "$REPO/references"
 tar xJf "$TMP"

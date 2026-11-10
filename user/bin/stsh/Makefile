@@ -8,8 +8,14 @@ OBJS = $(SRCS:.c=.o)
 stsh.elf: $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $(OBJS)
 
+caps.o: ../../lib/libinstall/admin_targets.h
+
 %.o: %.c stsh.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
 	rm -f *.elf *.o
+
+.PHONY: host-test
+host-test:
+	python3 tests/host.py

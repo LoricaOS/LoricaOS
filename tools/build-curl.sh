@@ -4,7 +4,7 @@
 # another arch (arm64: CC=<aarch64 musl gcc> HOST=aarch64-linux-musl
 # BEARSSL_INSTALL=.../bearssl-install-arm64 STRIP=aarch64-linux-gnu-strip
 # SUFFIX=-arm64 → build/curl-arm64/curl). herald forks /bin/curl for network.
-set -e
+set -euo pipefail
 
 REPO="${REPO:-$(cd "$(dirname "$0")/.." && pwd)}"
 CC="${CC:-musl-gcc}"
@@ -63,7 +63,7 @@ cd "$BUILD_DIR"
 # and libtool emits a dynamic tool anyway. A dynamic curl is fine on Aegis — the
 # musl dynamic linker (/lib/ld-musl-x86_64.so.1) and libc.so are present, and
 # BearSSL is baked into the static libcurl.a, so curl only needs libc at runtime.
-make -j"$(nproc)" V=1 2>&1 | tail -5
+make -j"${JOBS:-$(nproc)}" V=1
 
 if [ ! -f src/curl ]; then
     echo "[curl] ERROR: make did not produce src/curl" >&2

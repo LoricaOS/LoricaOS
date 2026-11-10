@@ -10,7 +10,7 @@
 #
 # ~85MB download, ~180MB extracted (GCC 11.2.1). Installs under build/.
 set -e
-REPO="$(git rev-parse --show-toplevel)"
+REPO="${REPO:-$(git rev-parse --show-toplevel)}"
 URL="${KTC_URL:-https://musl.cc/x86_64-linux-musl-native.tgz}"
 TMP="/tmp/x86_64-linux-musl-native.tgz"
 OUT="$REPO/build/kernel-toolchain"
@@ -25,4 +25,4 @@ rm -rf "$OUT" "$REPO/build/x86_64-linux-musl-native"
 tar -C "$REPO/build" -xzf "$TMP"
 mv "$REPO/build/x86_64-linux-musl-native" "$OUT"
 echo "[ktc] static musl gcc/binutils -> build/kernel-toolchain"
-"$OUT/bin/gcc" --version | head -1
+"$OUT/bin/gcc" --version

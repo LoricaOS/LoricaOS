@@ -9,6 +9,7 @@
 #define LIBINSTALL_H
 
 #include <stdint.h>
+#include "install_elevate.h"
 
 /* On-disk ESP layout, shared by gpt.c (partition table math) and copy.c
  * (raw image copy).  ESP_SIZE_BYTES MUST equal the size of esp.img exactly

@@ -26,9 +26,13 @@
 /* ── positional parameters + control-flow state ── */
 
 int         g_last_exit = 0;
+int         g_jobcontrol = 0;
+int         g_tty_fd = -1;
 const char *g_arg0      = "stsh";
 char       *g_params[MAX_PARAMS];
 int         g_nparams   = 0;
+static unsigned s_capture_serial;
+static char *s_owned_arg0;
 
 enum { FLOW_NONE = 0, FLOW_BREAK, FLOW_CONTINUE, FLOW_RETURN };
 static int g_flow  = FLOW_NONE;
@@ -59,10 +63,241 @@ func_find(const char *name)
 void
 run_set_params(const char *arg0, char **params, int nparams)
 {
-    if (arg0) g_arg0 = arg0;
     if (nparams > MAX_PARAMS) nparams = MAX_PARAMS;
+    if (nparams < 0) nparams=0;
+    char *new0=strdup(arg0 ? arg0 : g_arg0);
+    char *next[MAX_PARAMS]={0};
+    if (!new0) goto oom;
+    for (int i=0;i<nparams;i++) if (!(next[i]=strdup(params[i]))) goto oom;
+    free(s_owned_arg0); s_owned_arg0=new0; g_arg0=new0;
+    for (int i=0;i<g_nparams;i++) free(g_params[i]);
     g_nparams = nparams;
-    for (int i = 0; i < nparams; i++) g_params[i] = params[i];
+    for (int i = 0; i < nparams; i++) g_params[i] = next[i];
+    return;
+oom:
+    /* Continuing with a partially changed parameter vector would silently
+     * corrupt the state we promise to hand off. */
+    fprintf(stderr,"stsh: cannot allocate positional parameters\n");
+    exit(2);
+}
+
+/* Versioned, NUL-free argv transport. Records are decimal length ':' raw bytes,
+ * never executable shell source. This preserves quoted words and literal
+ * heredocs exactly and creates no filesystem object or inherited authority.
+ * All input is validated in a dry pass before allocating/applying any state.
+ * The kernel still applies the ordinary /bin/stsh policy and caller ceiling. */
+struct state_writer { char *buf; size_t used; int bad; };
+
+static void
+state_num(struct state_writer *w, unsigned n)
+{
+    char s[24];
+    int len=snprintf(s,sizeof s,"%u:",n);
+    if (w->bad || w->used+(size_t)len>=STSH_STATE_MAX) { w->bad=1; return; }
+    memcpy(w->buf+w->used,s,len); w->used+=len;
+}
+
+static void
+state_string(struct state_writer *w, const char *s)
+{
+    size_t n=strlen(s);
+    if (n>=STSH_STATE_MAX) { w->bad=1; return; }
+    state_num(w,(unsigned)n);
+    if (w->bad || w->used+n>=STSH_STATE_MAX) { w->bad=1; return; }
+    memcpy(w->buf+w->used,s,n); w->used+=n;
+}
+
+static void
+state_tokens(struct state_writer *w, const tok_t *tokens, int nt)
+{
+    if (nt<0 || nt>=MAX_TOKENS) { w->bad=1; return; }
+    state_num(w,nt);
+    for (int i=0;i<nt;i++) {
+        state_num(w,tokens[i].type);
+        state_string(w,tokens[i].text ? tokens[i].text : "");
+    }
+}
+
+static char *
+state_make(const tok_t *tokens, int nt)
+{
+    char *buf=malloc(STSH_STATE_MAX);
+    if (!buf) { perror("stsh: interpreter state"); return NULL; }
+    struct state_writer w={buf,0,0};
+    state_string(&w,"STSH1");
+    state_num(&w,(unsigned)g_last_exit & 255);
+    char **env=env_as_array(); int ne=0;
+    while (env[ne]) ne++;
+    state_num(&w,ne);
+    for (int i=0;i<ne;i++) state_string(&w,env[i]);
+    state_string(&w,g_arg0);
+    state_num(&w,g_nparams);
+    for (int i=0;i<g_nparams;i++) state_string(&w,g_params[i]);
+    state_num(&w,s_nfuncs);
+    for (int i=0;i<s_nfuncs;i++) {
+        state_string(&w,s_funcs[i].name);
+        state_tokens(&w,s_funcs[i].toks,s_funcs[i].nt);
+    }
+    state_tokens(&w,tokens,nt);
+    if (w.bad) {
+        fprintf(stderr,"stsh: interpreter state exceeds %d bytes\n",STSH_STATE_MAX-1);
+        free(buf); return NULL;
+    }
+    buf[w.used]='\0';
+    return buf;
+}
+
+struct state_reader { const char *p, *end; int bad, apply; };
+
+static unsigned
+state_read_num(struct state_reader *r, unsigned max)
+{
+    unsigned n=0;
+    if (r->bad || r->p==r->end || !isdigit((unsigned char)*r->p)) { r->bad=1; return 0; }
+    while (r->p<r->end && isdigit((unsigned char)*r->p)) {
+        unsigned d=*r->p++-'0';
+        if (d>max || n>(max-d)/10) { r->bad=1; return 0; }
+        n=n*10+d;
+    }
+    if (r->p==r->end || *r->p++!=':') r->bad=1;
+    return n;
+}
+
+static char *
+state_read_string(struct state_reader *r, unsigned max, int require_equal)
+{
+    unsigned n=state_read_num(r,max);
+    if (r->bad || (size_t)(r->end-r->p)<n) { r->bad=1; return NULL; }
+    const char *p=r->p; r->p+=n;
+    if (require_equal && (!n || !memchr(p,'=',n) || *p=='=')) r->bad=1;
+    if (!r->apply || r->bad) return NULL;
+    char *s=malloc(n+1);
+    if (!s) { r->bad=1; return NULL; }
+    memcpy(s,p,n); s[n]='\0'; return s;
+}
+
+static tok_t *
+state_read_tokens(struct state_reader *r, int *nt)
+{
+    *nt=state_read_num(r,MAX_TOKENS-1);
+    tok_t *tokens=r->apply && !r->bad ? calloc(*nt+1,sizeof(tok_t)) : NULL;
+    if (r->apply && !tokens) r->bad=1;
+    for (int i=0;i<*nt && !r->bad;i++) {
+        unsigned type=state_read_num(r,T_EOF-1);
+        char *text=state_read_string(r,type==T_WORD ? STSH_STATE_MAX-1 : 0,0);
+        if (tokens) { tokens[i].type=type; tokens[i].text=text; }
+    }
+    if (tokens) tokens[*nt].type=T_EOF;
+    return tokens;
+}
+
+static int run_list(int *pi, int run, int in_loop);
+
+int
+run_bootstrap(const char *payload)
+{
+    size_t size=strnlen(payload,STSH_STATE_MAX);
+    if (size==STSH_STATE_MAX) goto invalid;
+    /* Pass one proves the entire schema and total consumption; pass two can
+     * then allocate only bounded counts/strings. Nothing executes before EOF. */
+    for (int apply=0;apply<2;apply++) {
+        struct state_reader r={payload,payload+size,0,apply};
+        unsigned magiclen=state_read_num(&r,5);
+        if (r.bad || magiclen!=5 || r.end-r.p<5 || memcmp(r.p,"STSH1",5)) goto invalid;
+        r.p+=5;
+        int status=state_read_num(&r,255);
+        unsigned ne=state_read_num(&r,ENV_MAX);
+        char *env[ENV_MAX+1]={0};
+        for (unsigned i=0;i<ne && !r.bad;i++) env[i]=state_read_string(&r,255,1);
+        char *arg0=state_read_string(&r,STSH_STATE_MAX-1,0);
+        unsigned np=state_read_num(&r,MAX_PARAMS);
+        char *params[MAX_PARAMS];
+        for (unsigned i=0;i<np && !r.bad;i++) params[i]=state_read_string(&r,STSH_STATE_MAX-1,0);
+        unsigned nf=state_read_num(&r,MAX_FUNCS);
+        const char *names[MAX_FUNCS]; size_t lengths[MAX_FUNCS];
+        for (unsigned i=0;i<nf && !r.bad;i++) {
+            const char *record=r.p;
+            char *name=state_read_string(&r,63,0); int nt;
+            if (r.bad) break;
+            names[i]=memchr(record,':',r.p-record);
+            if (!names[i]) { r.bad=1; break; }
+            names[i]++;
+            lengths[i]=r.p-names[i];
+            if (!lengths[i]) { r.bad=1; break; }
+            for (unsigned j=0;j<i;j++)
+                if (lengths[i]==lengths[j] && !memcmp(names[i],names[j],lengths[i])) r.bad=1;
+            tok_t *body=state_read_tokens(&r,&nt);
+            if (apply && !r.bad) {
+                if (!*name || func_find(name)) { r.bad=1; break; }
+                struct func *f=&s_funcs[s_nfuncs++];
+                strcpy(f->name,name); free(name); f->toks=body; f->nt=nt;
+            }
+        }
+        int nt; tok_t *tokens=state_read_tokens(&r,&nt);
+        if (r.bad || r.p!=r.end) goto invalid;
+        if (apply) {
+            env_init(env);
+            for (unsigned i=0;i<ne;i++) free(env[i]);
+            run_set_params(arg0,params,np); g_last_exit=status;
+            free(arg0); for (unsigned i=0;i<np;i++) free(params[i]);
+            T=tokens; NT=nt;
+            int i=0; run_list(&i,1,0);
+            return g_last_exit;
+        }
+    }
+invalid:
+    fprintf(stderr,"stsh: invalid, unsupported, oversized, or unallocatable interpreter state\n");
+    return 2;
+}
+
+/* Only descriptor/process setup, exec, and _exit below fork. No parser,
+ * builtin, I/O, or capability operation in the old image. An interactive
+ * top-level state job owns its foreground group; fresh nested interpreters
+ * have job control disabled and stay inside that job. */
+static pid_t
+state_spawn(char *payload, int output, int closefd, pid_t *oldfg)
+{
+    *oldfg=-1;
+    if (g_jobcontrol) {
+        *oldfg=tcgetpgrp(g_tty_fd);
+        if (*oldfg<0) { perror("stsh: state foreground"); return -1; }
+    }
+    fflush(NULL);
+    pid_t pid=fork();
+    if (pid==0) {
+        if (output>=0 && output!=STDOUT_FILENO && dup2(output,STDOUT_FILENO)<0) _exit(125);
+        if (closefd>=0 && closefd!=STDOUT_FILENO) close(closefd);
+        if (output>=0 && output!=STDOUT_FILENO) close(output);
+        if (g_jobcontrol) {
+            struct sigaction sa;
+            memset(&sa,0,sizeof sa); sa.sa_handler=SIG_DFL;
+            if (setpgid(0,0)<0 || sigaction(SIGTTOU,&sa,NULL)<0) _exit(125);
+        }
+        if (g_tty_fd>=0) close(g_tty_fd);
+        char *av[]={STSH_PATH,"--state-v1",payload,NULL};
+        execve(STSH_PATH,av,env_as_array());
+        _exit(127);
+    }
+    if (pid<0) perror("stsh: fork interpreter");
+    else if (g_jobcontrol) {
+        if ((setpgid(pid,pid)<0 && errno!=EACCES && errno!=ESRCH) ||
+            tcsetpgrp(g_tty_fd,pid)<0) {
+            perror("stsh: state foreground");
+            if (kill(pid,SIGKILL)<0 && errno!=ESRCH) perror("stsh: kill state job");
+            sh_wait(pid,"aborted state job");
+            if (tcsetpgrp(g_tty_fd,*oldfg)<0) perror("stsh: restore foreground");
+            *oldfg=-1;
+            return -1;
+        }
+    }
+    return pid;
+}
+
+static void
+state_restore_foreground(pid_t oldfg)
+{
+    if (oldfg>=0 && tcsetpgrp(g_tty_fd,oldfg)<0)
+        perror("stsh: restore foreground");
 }
 
 /* ═══════════════════════════ arithmetic $(( )) ═══════════════════════════ */
@@ -212,6 +447,7 @@ struct fb {
     int    fhas;     /* current field has any char */
     int    fquoted;  /* current field had a quote/escape (suppresses glob) */
     int    noglob;   /* never pathname-glob (case patterns, assignment RHS) */
+    int    nosplit;  /* single-word contexts preserve whitespace verbatim */
 };
 
 static void
@@ -279,11 +515,11 @@ expand_word(const char *raw, struct fb *b)
     while (*p) {
         char c = *p;
         if (c == '\'') {                       /* single quote: literal, no split */
-            b->fquoted = 1; p++;
+            b->fquoted = 1; b->fhas = 1; p++;
             while (*p && *p != '\'') fb_putc(b, *p++);
             if (*p) p++;
         } else if (c == '"') {                 /* double quote: expand, no split */
-            b->fquoted = 1; p++;
+            b->fquoted = 1; b->fhas = 1; p++;
             while (*p && *p != '"') {
                 if (*p == '$') { const char *q=p+1; read_dollar(&q,val,sizeof val); p=q; fb_emit_value(b,val,0); }
                 else if (*p == '`') { const char *q=p+1; const char *st=q; while(*q&&*q!='`')q++; int len=(int)(q-st); char cmd[LINE_SIZE]; if(len>(int)sizeof(cmd)-1)len=sizeof(cmd)-1; memcpy(cmd,st,len); cmd[len]='\0'; if(*q=='`')q++; p=q; int u=0; char cap[LINE_SIZE]; sh_capture(cmd,cap,&u,sizeof cap); cap[u]='\0'; fb_emit_value(b,cap,0); }
@@ -296,13 +532,13 @@ expand_word(const char *raw, struct fb *b)
             if (p[1]) { fb_putc(b,p[1]); p+=2; } else p++;
         } else if (c == '$') {
             const char *q=p+1; read_dollar(&q,val,sizeof val); p=q;
-            fb_emit_value(b, val, 1);          /* unquoted: split */
+            fb_emit_value(b, val, !b->nosplit);
         } else if (c == '`') {
             const char *q=p+1; const char *st=q; while(*q&&*q!='`')q++;
             int len=(int)(q-st); char cmd[LINE_SIZE]; if(len>(int)sizeof(cmd)-1)len=sizeof(cmd)-1;
             memcpy(cmd,st,len); cmd[len]='\0'; if(*q=='`')q++; p=q;
             int u=0; char cap[LINE_SIZE]; sh_capture(cmd,cap,&u,sizeof cap); cap[u]='\0';
-            fb_emit_value(b, cap, 1);
+            fb_emit_value(b, cap, !b->nosplit);
         } else {
             fb_putc(b, c); p++;
         }
@@ -312,14 +548,13 @@ expand_word(const char *raw, struct fb *b)
 
 /* Expand a single word to exactly one string, written into `out` (returns it).
  * Used for assignment RHS, redirect targets, case word, `for` var value. Fields
- * from an unquoted expansion are re-joined with spaces. ponytail: this also
- * globs (so `X=*.c` could expand) — mostly harmless; a Layer 3 nicety to gate. */
+ * in these contexts are not field-split or pathname-expanded. */
 static char *
 expand_one(const char *raw, char *out, int outcap)
 {
     char  tmp[LINE_SIZE]; int used = 0;
     char *argv[16]; int argc = 0;
-    struct fb b = { argv, &argc, 16, tmp, &used, sizeof tmp, 0, 0, 0, 1 };  /* noglob */
+    struct fb b = { argv, &argc, 16, tmp, &used, sizeof tmp, 0, 0, 0, 1, 1 };
     expand_word(raw, &b);
     int j = 0;
     for (int i = 0; i < argc && j < outcap-1; i++) {
@@ -335,26 +570,34 @@ expand_one(const char *raw, char *out, int outcap)
 void
 sh_capture(const char *cmd, char *buf, int *used, int cap)
 {
+    s_capture_serial++;
+    tok_t toks[MAX_TOKENS]; char arena[LEX_ARENA*4];
+    int nt=tokenize(cmd,toks,MAX_TOKENS,arena,sizeof arena);
+    if (nt<0) { fprintf(stderr,"stsh: substitution too large\n"); g_last_exit=2; return; }
+    char *payload=state_make(toks,nt);
+    if (!payload) { g_last_exit=2; return; }
     int pfd[2];
-    if (pipe(pfd) < 0) return;
-    pid_t pid = fork();
-    if (pid < 0) { close(pfd[0]); close(pfd[1]); return; }
-    if (pid == 0) {
-        dup2(pfd[1], STDOUT_FILENO);
-        close(pfd[0]); close(pfd[1]);
-        char b[LINE_SIZE];
-        strncpy(b, cmd, sizeof b - 1); b[sizeof b - 1] = '\0';
-        run_program(b);
-        _exit(g_last_exit);
+    if (pipe(pfd)<0) { perror("stsh: capture pipe"); free(payload); g_last_exit=1; return; }
+    pid_t oldfg;
+    pid_t pid=state_spawn(payload,pfd[1],pfd[0],&oldfg);
+    free(payload);
+    if (pid<0) {
+        close(pfd[0]); close(pfd[1]); g_last_exit=1; return;
     }
     close(pfd[1]);
     int start = *used;
-    char rb[512]; ssize_t r;
-    while ((r = read(pfd[0], rb, sizeof rb)) > 0)
+    char rb[512]; ssize_t r; int failed=0;
+    for (;;) {
+        r=read(pfd[0],rb,sizeof rb);
+        if (r<0 && errno==EINTR) continue;
+        if (r<=0) { if(r<0){perror("stsh: capture read");failed=1;} break; }
         for (ssize_t k = 0; k < r; k++)
             if (*used < cap - 1) buf[(*used)++] = rb[k];
+    }
     close(pfd[0]);
-    waitpid(pid, NULL, 0);
+    g_last_exit=sh_wait(pid,"command substitution");
+    state_restore_foreground(oldfg);
+    if (failed) g_last_exit=1;
     while (*used > start && buf[*used - 1] == '\n') (*used)--;
     if (*used < cap) buf[*used] = '\0';
 }
@@ -400,6 +643,37 @@ is_builtin_name(const char *n)
     return 0;
 }
 
+/* Pipeline/background builtins and functions exec before interpreting. Quote
+ * expanded argv into literal WORD tokens, never expand substitutions twice. */
+int
+command_bootstrap(cmd_t *cmd)
+{
+    if (cmd->external_only) return 0;
+    if (!cmd->argv[0] || (!is_builtin_name(cmd->argv[0]) && !func_find(cmd->argv[0])))
+        return 0;
+    char *arena=malloc(STSH_STATE_MAX);
+    if (!arena) { perror("stsh: command state"); return -1; }
+    tok_t tokens[MAX_ARGV]; size_t used=0;
+    for (int i=0;i<cmd->argc;i++) {
+        tokens[i]=(tok_t){T_WORD,arena+used};
+        if (used+3>=STSH_STATE_MAX) goto large;
+        arena[used++]='\'';
+        for (const char *p=cmd->argv[i];*p;p++) {
+            if (used+5>=STSH_STATE_MAX) goto large;
+            if (*p=='\'') { memcpy(arena+used,"'\\''",4); used+=4; }
+            else arena[used++]=*p;
+        }
+        arena[used++]='\''; arena[used++]='\0';
+    }
+    cmd->bootstrap=state_make(tokens,cmd->argc);
+    free(arena);
+    return cmd->bootstrap ? 0 : -1;
+large:
+    free(arena);
+    fprintf(stderr,"stsh: command interpreter state too large\n");
+    return -1;
+}
+
 /* Returns 1 if handled as a shell-process builtin. */
 static int
 shell_builtin(char **argv, int argc)
@@ -417,6 +691,7 @@ shell_builtin(char **argv, int argc)
         }
         if (argc>=2) {   /* `command cmd args` — run externally, bypassing funcs */
             cmd_t cc; memset(&cc,0,sizeof cc);
+            cc.external_only=1;
             for (int i=1;i<argc;i++) cc.argv[i-1]=argv[i];
             cc.argv[argc-1]=NULL; cc.argc=argc-1;
             run_pipeline(&cc,1,env_as_array(),&g_last_exit);
@@ -432,7 +707,9 @@ shell_builtin(char **argv, int argc)
     if (!strcmp(c,"return"))   { g_flow=FLOW_RETURN;   g_last_exit=argv[1]?atoi(argv[1]):g_last_exit; return 1; }
     if (!strcmp(c,"shift")) {
         int n = argv[1]?atoi(argv[1]):1;
+        if (n<0) { g_last_exit=2; return 1; }
         if (n>g_nparams) n=g_nparams;
+        for (int i=0;i<n;i++) free(g_params[i]);
         for (int i=0;i+n<g_nparams;i++) g_params[i]=g_params[i+n];
         g_nparams-=n; g_last_exit=0; return 1;
     }
@@ -522,7 +799,12 @@ shell_builtin(char **argv, int argc)
         return 1;
     }
     if (!strcmp(c,"env"))  { env_print_all(); g_last_exit=0; return 1; }
-    if (!strcmp(c,"help")) { puts("stsh: POSIX-ish shell (if/for/while/case, functions, globbing)"); g_last_exit=0; return 1; }
+    if (!strcmp(c,"help")) {
+        puts("stsh: POSIX-ish shell (if/for/while/case, functions, globbing)");
+        puts("admin command [args...]: authenticate one allowlisted /bin command");
+        puts("Commands do not inherit the shell's authentication or capabilities.");
+        g_last_exit=0; return 1;
+    }
 
     /* cap-model builtins (from caps.c) */
     if (!strcmp(c,"caps"))    { g_last_exit=caps_builtin(argc,argv); return 1; }
@@ -570,32 +852,31 @@ static int is_compound_start(int i){
 
 /* ── redirections for in-process builtins/functions ── */
 
+static void redir_restore(int saved[3]);
+
 static int
 redir_apply(cmd_t *c, int saved[3])
 {
+    int fds[3];
+    if (redir_prepare(c, fds, -1, -1) < 0) return -1;
+    fflush(NULL);
     saved[0]=saved[1]=saved[2]=-1;
-    if (c->stdin_file) {
-        int fd=open(c->stdin_file,O_RDONLY);
-        if (fd<0){ fprintf(stderr,"%s: %s\n",c->stdin_file,strerror(errno)); return -1; }
-        saved[0]=dup(0); dup2(fd,0); close(fd);
+    for (int i=0; i<3; i++) {
+        saved[i]=sh_save_fd(i);
+        if (saved[i]<0) {
+            if (errno==EBADF) { saved[i]=-2; continue; } /* originally closed */
+            perror("stsh: save descriptors");
+            redir_close(saved); redir_close(fds);
+            return -1;
+        }
     }
-    if (c->heredoc_body) {
-        int hf=heredoc_stdin(c->heredoc_body);
-        if (hf>=0){ if(saved[0]<0)saved[0]=dup(0); dup2(hf,0); close(hf); }
+    if (redir_install(fds)<0) {
+        perror("stsh: install descriptors");
+        redir_close(fds); redir_restore(saved);
+        return -1;
     }
-    if (c->stdout_file) {
-        int fl=O_WRONLY|O_CREAT|(c->stdout_append?O_APPEND:O_TRUNC);
-        int fd=open(c->stdout_file,fl,0644);
-        if (fd<0){ fprintf(stderr,"%s: %s\n",c->stdout_file,strerror(errno)); return -1; }
-        saved[1]=dup(1); dup2(fd,1); close(fd);
-    }
-    if (c->stderr_file) {
-        int fd=open(c->stderr_file,O_WRONLY|O_CREAT|O_TRUNC,0644);
-        if (fd<0){ fprintf(stderr,"%s: %s\n",c->stderr_file,strerror(errno)); return -1; }
-        saved[2]=dup(2); dup2(fd,2); close(fd);
-    }
-    if (c->stderr_to_stdout) { saved[2]=dup(2); dup2(1,2); }
-    if (c->stdout_dup_to) { if(saved[1]<0)saved[1]=dup(1); dup2(c->stdout_dup_to,1); }  /* >&N */
+    redir_close(fds);
+    clearerr(stdin); clearerr(stdout); clearerr(stderr);
     return 0;
 }
 
@@ -603,9 +884,48 @@ static void
 redir_restore(int saved[3])
 {
     fflush(stdout); fflush(stderr);
-    if (saved[0]>=0){ dup2(saved[0],0); close(saved[0]); }
-    if (saved[1]>=0){ dup2(saved[1],1); close(saved[1]); }
-    if (saved[2]>=0){ dup2(saved[2],2); close(saved[2]); }
+    for (int i=0;i<3;i++) {
+        if (saved[i]>=0) {
+            if (dup2(saved[i],i)<0) perror("stsh: restore descriptor");
+            close(saved[i]);
+        } else if (saved[i]==-2) close(i);
+    }
+    clearerr(stdin); clearerr(stdout); clearerr(stderr);
+}
+
+/* Both simple commands and pipeline stages use the same ordered syntax. */
+static int
+parse_redir(int *pi, cmd_t *cmd)
+{
+    int i=*pi, operand=1;
+    redir_kind kind;
+    switch (T[i].type) {
+    case T_LT: kind=R_IN; break;
+    case T_DLESS: kind=R_HERE; break;
+    case T_GT: kind=R_OUT; break;
+    case T_GTGT: kind=R_APPEND; break;
+    case T_DGT: kind=R_ERR; break;
+    case T_DGTAMP: kind=R_ERR_OUT; operand=0; break;
+    case T_GTAMP: kind=R_DUP; break;
+    default: return 0;
+    }
+    *pi=i+1;
+    if ((operand && T[i+1].type!=T_WORD) || cmd->nredirs==MAX_REDIR)
+        return -1;
+    cmd->redirs[cmd->nredirs++]=(redir_t){kind, operand ? T[i+1].text : NULL};
+    if (operand) (*pi)++;
+    return 1;
+}
+
+int
+run_expand_redirect(const char *raw, char *out, int cap)
+{
+    expand_one(raw,out,cap);
+    if (strlen(out)>=(size_t)cap-1) {
+        errno=E2BIG;
+        return -1;
+    }
+    return 0;
 }
 
 /* ── simple command ── */
@@ -616,6 +936,7 @@ run_simple(int *pi, int run)
     int i = *pi;
     char *raw[MAX_ARGV]; int nraw = 0;
     cmd_t cmd; memset(&cmd, 0, sizeof cmd);
+    int bad_redir=0;
 
     while (T[i].type != T_EOF) {
         toktype_t tt = T[i].type;
@@ -625,19 +946,18 @@ run_simple(int *pi, int run)
             if (nraw==0 && at_block_end(i)) break;
             if (nraw < MAX_ARGV) raw[nraw++] = T[i].text;
             i++;
-        } else if (tt==T_LT)    { if(T[i+1].type==T_WORD){cmd.stdin_file=T[i+1].text;i+=2;}else i++; }
-        else if (tt==T_DLESS)   { if(T[i+1].type==T_WORD){cmd.heredoc_body=T[i+1].text;i+=2;}else i++; }
-        else if (tt==T_GT)      { if(T[i+1].type==T_WORD){cmd.stdout_file=T[i+1].text;cmd.stdout_append=0;i+=2;}else i++; }
-        else if (tt==T_GTGT)    { if(T[i+1].type==T_WORD){cmd.stdout_file=T[i+1].text;cmd.stdout_append=1;i+=2;}else i++; }
-        else if (tt==T_DGT)     { if(T[i+1].type==T_WORD){cmd.stderr_file=T[i+1].text;i+=2;}else i++; }
-        else if (tt==T_DGTAMP)  { cmd.stderr_to_stdout=1; i++; }
-        else if (tt==T_GTAMP)   { if(T[i+1].type==T_WORD){cmd.stdout_dup_to=atoi(T[i+1].text);i+=2;}else i++; }
-        else break;   /* separator/pipe/paren ends the command */
+        } else {
+            int r=parse_redir(&i,&cmd);
+            if (!r) break;
+            if (r<0) bad_redir=1;
+        }
     }
     *pi = i;
-    if (!run || nraw==0) return g_last_exit;
+    if (!run) return g_last_exit;
+    if (bad_redir) { fprintf(stderr,"stsh: invalid or excessive redirections\n"); return (g_last_exit=2); }
 
     /* expand: assignments first (RHS expanded, no split), then argv words */
+    unsigned capture_before=s_capture_serial;
     char argbuf[LINE_SIZE*2]; int used=0; char *argv[MAX_ARGV+1]; int argc=0;
     int k = 0;
     while (k < nraw && is_assignment(raw[k])) {
@@ -648,7 +968,6 @@ run_simple(int *pi, int run)
         *eq='=';
         k++;
     }
-    int had_assign = (k>0);
     for (; k < nraw; k++) {
         struct fb b = { argv, &argc, MAX_ARGV, argbuf, &used, sizeof argbuf, used, 0, 0 };
         b.fstart = used;
@@ -656,23 +975,35 @@ run_simple(int *pi, int run)
     }
     argv[argc] = NULL;
 
-    if (argc==0) { if (had_assign) g_last_exit=0; return g_last_exit; }
+    if (argc==0) {
+        int fds[3];
+        if (redir_prepare(&cmd,fds,-1,-1)<0) return (g_last_exit=1);
+        redir_close(fds);
+        if (s_capture_serial==capture_before) g_last_exit=0;
+        return g_last_exit;
+    }
 
-    /* redirect targets need expansion too */
-    char rin[LINE_SIZE], rout[LINE_SIZE], rerr[LINE_SIZE];
-    if (cmd.stdin_file)  cmd.stdin_file  = expand_one(cmd.stdin_file, rin, sizeof rin);
-    if (cmd.stdout_file) cmd.stdout_file = expand_one(cmd.stdout_file, rout, sizeof rout);
-    if (cmd.stderr_file) cmd.stderr_file = expand_one(cmd.stderr_file, rerr, sizeof rerr);
-
-    int need_redir = cmd.stdin_file||cmd.heredoc_body||cmd.stdout_file||cmd.stderr_file||cmd.stderr_to_stdout;
+    int need_redir = cmd.nredirs!=0;
     int rsaved[3];
+
+    for (int a=0;a<=argc;a++) cmd.argv[a]=argv[a];
+    cmd.argc=argc;
+    if (T[*pi].type==T_AMP) {
+        g_last_exit=run_pipeline_bg(&cmd,1,env_as_array());
+        free(cmd.bootstrap);
+        return g_last_exit;
+    }
 
     /* function call? runs against the function's private token copy */
     struct func *fn = func_find(argv[0]);
     if (fn) {
         if (need_redir && redir_apply(&cmd,rsaved)<0){ g_last_exit=1; return 1; }
-        char *saved[MAX_PARAMS]; int sn=g_nparams; const char *s0=g_arg0;
-        for (int x=0;x<g_nparams;x++) saved[x]=g_params[x];
+        char *saved[MAX_PARAMS]; int sn=g_nparams; char *s0=strdup(g_arg0);
+        if (!s0) { fprintf(stderr,"stsh: cannot save parameters\n"); exit(2); }
+        for (int x=0;x<g_nparams;x++) {
+            saved[x]=strdup(g_params[x]);
+            if (!saved[x]) { fprintf(stderr,"stsh: cannot save parameters\n"); exit(2); }
+        }
         run_set_params(g_arg0, &argv[1], argc-1);
         tok_t *sT=T; int sNT=NT;
         T=fn->toks; NT=fn->nt;
@@ -680,6 +1011,7 @@ run_simple(int *pi, int run)
         run_and_or(&idx, 1, 0);            /* body is a compound (brace group) */
         T=sT; NT=sNT;
         run_set_params(s0, saved, sn);
+        free(s0); for (int x=0;x<sn;x++) free(saved[x]);
         if (g_flow==FLOW_RETURN) g_flow=FLOW_NONE;
         if (need_redir) redir_restore(rsaved);
         return g_last_exit;
@@ -696,17 +1028,7 @@ run_simple(int *pi, int run)
         return g_last_exit;
     }
 
-    /* external: reuse the tested single-stage pipeline path (handles its own redirs).
-     * If followed by '&' the caller (run_list) will consume the T_AMP, but we
-     * peek at it here to choose the non-waiting background path.  Builtins and
-     * functions run in-process and can't be backgrounded, so '&' after them
-     * is a no-op (they run foreground, as before). */
-    if (T[*pi].type == T_AMP) {
-        run_pipeline_bg(&cmd, 1, env_as_array());
-        g_last_exit = 0;
-    } else {
-        run_pipeline(&cmd, 1, env_as_array(), &g_last_exit);
-    }
+    run_pipeline(&cmd, 1, env_as_array(), &g_last_exit);
     return g_last_exit;
 }
 
@@ -815,7 +1137,7 @@ static int
 run_case(int *pi, int run)
 {
     int i=*pi+1;                    /* past 'case' */
-    char wbuf[LINE_SIZE]; char *word = (T[i].type==T_WORD)? expand_one(T[i].text,wbuf,sizeof wbuf):"";
+    char wbuf[LINE_SIZE]; char *word = (run && T[i].type==T_WORD)? expand_one(T[i].text,wbuf,sizeof wbuf):"";
     if (T[i].type==T_WORD) i++;
     if (is_kw(i,"in")) i++;
     skip_seps(&i);
@@ -828,7 +1150,7 @@ run_case(int *pi, int run)
         int thismatch=0;
         for (;;) {
             if (T[i].type==T_WORD) {
-                char pb[LINE_SIZE]; char *pat=expand_one(T[i].text,pb,sizeof pb);
+                char pb[LINE_SIZE]; char *pat=run ? expand_one(T[i].text,pb,sizeof pb) : "";
                 if (!matched && fnmatch(pat, word, 0)==0) thismatch=1;
                 i++;
             }
@@ -872,21 +1194,28 @@ static int
 run_subshell(int *pi, int run)
 {
     int i=*pi+1;                    /* past '(' */
-    if (!run) { int r=run_list(&i,0,0); if(T[i].type==T_RPAREN)i++; *pi=i; return g_last_exit; }
-    /* find matching ) by executing with run in a child */
-    pid_t pid=fork();
-    if (pid==0) { int r=run_list(&i,1,0); (void)r; _exit(g_last_exit); }
-    /* parent: skip the body to the matching ) */
-    int r=run_list(&i,0,0); if(T[i].type==T_RPAREN)i++; *pi=i;
-    int st; waitpid(pid,&st,0);
-    g_last_exit = WIFEXITED(st)?WEXITSTATUS(st):1;
+    int body=i;
+    run_list(&i,0,0);
+    int end=i;
+    int closed=T[i].type==T_RPAREN;
+    if(closed)i++;
+    *pi=i;
+    if (!run) return g_last_exit;
+    if (!closed) { fprintf(stderr,"stsh: unclosed subshell\n"); return (g_last_exit=2); }
+    char *payload=state_make(T+body,end-body);
+    if (!payload) return (g_last_exit=2);
+    pid_t oldfg;
+    pid_t pid=state_spawn(payload,-1,-1,&oldfg);
+    free(payload);
+    g_last_exit=pid<0 ? 1 : sh_wait(pid,"subshell");
+    state_restore_foreground(oldfg);
     return g_last_exit;
 }
 
 /* function definition: `name () compound` — deep-copy the body tokens so the
  * function outlives the program buffer it was defined in. */
 static int
-try_funcdef(int *pi)
+try_funcdef(int *pi, int run)
 {
     int i=*pi;
     if (T[i].type==T_WORD && T[i].text && T[i+1].type==T_LPAREN && T[i+2].type==T_RPAREN) {
@@ -895,19 +1224,27 @@ try_funcdef(int *pi)
         int body=i;
         run_and_or(&i, 0, 0);              /* skip the body compound to find its end */
         int len=i-body;
+        if (!run) { *pi=i; return 1; }
 
         struct func *fn = func_find(name);
-        if (!fn && s_nfuncs<MAX_FUNCS) fn=&s_funcs[s_nfuncs++];
-        if (fn) {
-            strncpy(fn->name,name,63); fn->name[63]='\0';
-            fn->toks = malloc(sizeof(tok_t)*(len+1));
-            fn->nt = len;
-            for (int k=0;k<len;k++) {
-                fn->toks[k].type = T[body+k].type;
-                fn->toks[k].text = T[body+k].text ? strdup(T[body+k].text) : NULL;
-            }
-            fn->toks[len].type=T_EOF; fn->toks[len].text=NULL;
+        tok_t *copy=calloc(len+1,sizeof(tok_t));
+        if (!copy || (!fn && s_nfuncs==MAX_FUNCS)) {
+            free(copy); fprintf(stderr,"stsh: function storage exhausted\n");
+            *pi=i; g_last_exit=2; return 1;
         }
+        for (int k=0;k<len;k++) {
+            copy[k].type=T[body+k].type;
+            if (T[body+k].text && !(copy[k].text=strdup(T[body+k].text))) {
+                for (int x=0;x<k;x++) free(copy[x].text);
+                free(copy); fprintf(stderr,"stsh: cannot copy function\n");
+                *pi=i; g_last_exit=2; return 1;
+            }
+        }
+        copy[len].type=T_EOF;
+        if (!fn) fn=&s_funcs[s_nfuncs++];
+        /* As before, prior definitions remain allocated: an active invocation
+         * (including a caller of the current function) may still use them. */
+        strcpy(fn->name,name); fn->toks=copy; fn->nt=len;
         *pi=i; g_last_exit=0;
         return 1;
     }
@@ -918,7 +1255,7 @@ try_funcdef(int *pi)
 static int
 run_command(int *pi, int run, int in_loop)
 {
-    if (try_funcdef(pi)) return g_last_exit;
+    if (try_funcdef(pi,run)) return g_last_exit;
 
     int i=*pi;
     if (is_compound_start(i)) {
@@ -931,7 +1268,9 @@ run_command(int *pi, int run, int in_loop)
         else if (is_kw(i,"{"))      r=run_brace(&i,run);
         else if (T[i].type==T_LPAREN) r=run_subshell(&i,run);
         else r=g_last_exit;
-        *pi=i; return r;
+        *pi=i;
+        if (run) g_last_exit=r;
+        return r;
     }
     return run_simple(pi, run);
 }
@@ -947,7 +1286,7 @@ run_pipeline_node(int *pi, int run, int in_loop)
         return run_command(pi, run, in_loop);
     }
 
-    cmd_t cmds[MAX_PIPELINE]; int nc=0;
+    cmd_t cmds[MAX_PIPELINE]; int nc=0, bad=0;
     char argbuf[MAX_PIPELINE][LINE_SIZE*2]; int argused[MAX_PIPELINE];
     /* parse+expand each stage */
     for (;;) {
@@ -957,14 +1296,11 @@ run_pipeline_node(int *pi, int run, int in_loop)
         while (T[i].type!=T_EOF) {
             toktype_t tt=T[i].type;
             if (tt==T_WORD){ if(nraw==0&&at_block_end(i))break; if(nraw<MAX_ARGV)raw[nraw++]=T[i].text; i++; }
-            else if (tt==T_LT){ if(T[i+1].type==T_WORD){cmd.stdin_file=T[i+1].text;i+=2;}else i++; }
-            else if (tt==T_DLESS){ if(T[i+1].type==T_WORD){cmd.heredoc_body=T[i+1].text;i+=2;}else i++; }
-            else if (tt==T_GT){ if(T[i+1].type==T_WORD){cmd.stdout_file=T[i+1].text;cmd.stdout_append=0;i+=2;}else i++; }
-            else if (tt==T_GTGT){ if(T[i+1].type==T_WORD){cmd.stdout_file=T[i+1].text;cmd.stdout_append=1;i+=2;}else i++; }
-            else if (tt==T_DGT){ if(T[i+1].type==T_WORD){cmd.stderr_file=T[i+1].text;i+=2;}else i++; }
-            else if (tt==T_DGTAMP){ cmd.stderr_to_stdout=1; i++; }
-            else if (tt==T_GTAMP){ if(T[i+1].type==T_WORD){cmd.stdout_dup_to=atoi(T[i+1].text);i+=2;}else i++; }
-            else break;
+            else {
+                int r=parse_redir(&i,&cmd);
+                if (!r) break;
+                if (r<0) bad=1;
+            }
         }
         if (nc==0 && T[i].type!=T_PIPE) { /* single stage — delegate to run_simple for builtins/functions */
             i=save; return run_simple(pi, run);
@@ -979,13 +1315,9 @@ run_pipeline_node(int *pi, int run, int in_loop)
             for (int a=0;a<=argc;a++) cmd.argv[a]=argv[a];
             cmd.argc=argc;
             argused[nc]=used;
-            /* expand redirects */
-            static char rr[MAX_PIPELINE][3][LINE_SIZE];
-            if(cmd.stdin_file)  cmd.stdin_file =expand_one(cmd.stdin_file, rr[nc][0],LINE_SIZE);
-            if(cmd.stdout_file) cmd.stdout_file=expand_one(cmd.stdout_file,rr[nc][1],LINE_SIZE);
-            if(cmd.stderr_file) cmd.stderr_file=expand_one(cmd.stderr_file,rr[nc][2],LINE_SIZE);
+            if (!argc) bad=1;
             cmds[nc++]=cmd;
-        } else if (nc<MAX_PIPELINE) { nc++; }
+        } else { nc++; if (nc>MAX_PIPELINE) bad=1; }
 
         if (T[i].type==T_PIPE) { i++; skip_newlines(&i); continue; }
         break;
@@ -993,17 +1325,20 @@ run_pipeline_node(int *pi, int run, int in_loop)
     *pi=i;
     (void)argused;
     if (!run) return g_last_exit;
+    if (bad) {
+        for (int x=0;x<nc && x<MAX_PIPELINE;x++) free(cmds[x].bootstrap);
+        fprintf(stderr,"stsh: invalid or excessive pipeline/redirections\n");
+        return (g_last_exit=2);
+    }
     /* Background '&': run the pipeline without waiting (run_list's per-
      * statement loop reaps it with WNOHANG once it exits).  Same peek-after-
      * parse pattern as run_simple. */
     if (T[i].type == T_AMP) {
-        if (nc==1) { run_pipeline_bg(&cmds[0],1,env_as_array()); }
-        else       { run_pipeline_bg(cmds, nc, env_as_array()); }
-        g_last_exit = 0;
-        return g_last_exit;
+        g_last_exit=run_pipeline_bg(cmds, nc, env_as_array());
+    } else {
+        run_pipeline(cmds, nc, env_as_array(), &g_last_exit);
     }
-    if (nc==1) { run_pipeline(&cmds[0],1,env_as_array(),&g_last_exit); return g_last_exit; }
-    run_pipeline(cmds, nc, env_as_array(), &g_last_exit);
+    for (int x=0;x<nc;x++) free(cmds[x].bootstrap);
     return g_last_exit;
 }
 
@@ -1031,7 +1366,13 @@ run_list(int *pi, int run, int in_loop)
     for (;;) {
         skip_seps(&i);
         if (at_block_end(i) || T[i].type==T_EOF) break;
+        int before=i;
         status = run_and_or(&i, run, in_loop);
+        if (i==before) {
+            if (run) fprintf(stderr,"stsh: unexpected token\n");
+            *pi=i+1;
+            return run ? (g_last_exit=2) : g_last_exit;
+        }
         if (g_flow!=FLOW_NONE) break;                 /* unwind loops/functions */
         /* Reap finished background jobs between statements. This is the one
          * loop every entry point (REPL, -c, run_script, source, loop bodies)
@@ -1039,9 +1380,7 @@ run_list(int *pi, int run, int in_loop)
          * SIGCHLD=SIG_IGN does NOT auto-reap on Aegis (zombies persist until
          * waitpid), so without this a script that backgrounds jobs leaks one
          * zombie per job for its whole runtime. */
-        if (run)
-            while (waitpid(-1, NULL, WNOHANG) > 0)
-                ;
+        if (run) sh_reap_background();
         /* background '&': run_and_or already peeked at the trailing T_AMP and
          * dispatched the pipeline via run_pipeline_bg (non-waiting).  Consume
          * the token here so the next command is its own statement. */
@@ -1084,8 +1423,12 @@ run_script(const char *path, char **argv_from, int argc_from)
     FILE *f=fopen(path,"r");
     if (!f){ fprintf(stderr,"stsh: %s: %s\n",path,strerror(errno)); return (g_last_exit=127); }
 
-    const char *s0=g_arg0; char *sp[MAX_PARAMS]; int sn=g_nparams;
-    for (int i=0;i<g_nparams;i++) sp[i]=g_params[i];
+    char *s0=strdup(g_arg0); char *sp[MAX_PARAMS]; int sn=g_nparams;
+    if (!s0) { fprintf(stderr,"stsh: cannot save parameters\n"); exit(2); }
+    for (int i=0;i<g_nparams;i++) {
+        sp[i]=strdup(g_params[i]);
+        if (!sp[i]) { fprintf(stderr,"stsh: cannot save parameters\n"); exit(2); }
+    }
     run_set_params(path, argv_from, argc_from);
 
     /* read whole file */
@@ -1094,6 +1437,7 @@ run_script(const char *path, char **argv_from, int argc_from)
     run_program(buf);
 
     run_set_params(s0,sp,sn);
+    free(s0); for (int i=0;i<sn;i++) free(sp[i]);
     return g_last_exit;
 }
 

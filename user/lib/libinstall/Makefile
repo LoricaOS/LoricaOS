@@ -11,8 +11,12 @@ OBJS   = $(SRCS:.c=.o)
 $(TARGET): $(OBJS)
 	ar rcs $@ $^
 
+# Standalone archive for administrative tools which need only authorization.
+libelevate.a: install_elevate.o
+	ar rcs $@ $^
+
 %.o: %.c $(wildcard *.h)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
-	rm -f $(TARGET) $(OBJS)
+	rm -f $(TARGET) libelevate.a $(OBJS)

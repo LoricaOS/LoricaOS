@@ -25,6 +25,23 @@ else
     WANT_ASSETS=1
 fi
 echo "[rootfs] profile: $PROFILE  (skeletons: ${SKELETONS[*]})"
+
+# cap_policy grants by these builtin path anchors, while ext2 records their
+# protected inodes at MOUNT. They must exist even in a profile with no payload
+# beneath them (notably /apps on server); creating them after boot is too late.
+BUILTIN_GRANT_ANCHORS=("/bin" "/sbin" "/apps")
+for SK in "${SKELETONS[@]}"; do
+    for anchor in "${BUILTIN_GRANT_ANCHORS[@]}"; do
+        entry="$SK$anchor"
+        if [[ -e "$entry" || -L "$entry" ]]; then
+            if [[ -L "$entry" || ! -d "$entry" ]]; then
+                echo "[rootfs] FATAL: granting anchor must be a real directory: $entry" >&2
+                exit 1
+            fi
+        fi
+    done
+done
+
 # 44 MiB LOGICAL rootfs ext2 (512-byte sectors), but the image is TRUNCATED to
 # its last non-zero block before shipping (see the truncate step at the end), so
 # the ISO carries only the ~14 MiB of real content — NOT the ~30 MiB of trailing
@@ -40,7 +57,8 @@ echo "[rootfs] profile: $PROFILE  (skeletons: ${SKELETONS[*]})"
 # group (cap 128 MiB) -> no tail backups -> trailing bytes are all zero.
 # P1_SECTORS (LOGICAL size) must stay in lockstep with the Makefile.
 P1_SECTORS=90112
-DEBUGFS="/sbin/debugfs"
+DEBUGFS="${DEBUGFS:-/sbin/debugfs}"
+MKE2FS="${MKE2FS:-/sbin/mke2fs}"
 
 # ── Create empty ext2 image ──────────────────────────────────────────────────
 rm -f "$ROOTFS_IMG"
@@ -49,12 +67,12 @@ dd if=/dev/zero of="$ROOTFS_IMG" bs=512 count=$P1_SECTORS 2>/dev/null
 # default (which spent roughly a quarter of every added group on inodes). 32 KiB
 # per inode leaves >1400 inodes in this one-group live image and scales to
 # >180k at the installer's 16 GiB ceiling.
-/sbin/mke2fs -t ext2 -F -b 4096 -i 32768 -L aegis-root "$ROOTFS_IMG" >/dev/null 2>&1
+"$MKE2FS" -t ext2 -F -b 4096 -i 32768 -L aegis-root "$ROOTFS_IMG" >/dev/null 2>&1
 
 # ── Helper: batch debugfs commands ───────────────────────────────────────────
 debugfs_run() {
     local out
-    out="$($DEBUGFS -w "$ROOTFS_IMG" <<< "$1" 2>&1)"
+    out="$("$DEBUGFS" -w "$ROOTFS_IMG" <<< "$1" 2>&1)"
     if echo "$out" | grep -qiE "could not allocate|no space left"; then
         echo "[rootfs] FATAL: ext2 image out of space writing: $1" >&2
         echo "[rootfs] grow P1_SECTORS (Makefile + tools/build-rootfs.sh)" >&2
@@ -78,6 +96,28 @@ ensure_dir() {
     fi
     debugfs_run "mkdir $dir"
     CREATED_DIRS["$dir"]=1
+}
+
+# Unconditional across server and desktop, before skeleton/manifests are copied.
+for anchor in "${BUILTIN_GRANT_ANCHORS[@]}"; do
+    ensure_dir "$anchor"
+    debugfs_run "set_inode_field $anchor mode 040755
+set_inode_field $anchor uid 0
+set_inode_field $anchor gid 0"
+done
+
+validate_grant_anchors() {
+    local anchor details
+    for anchor in "${BUILTIN_GRANT_ANCHORS[@]}"; do
+        # debugfs can exit successfully after an invalid command or missing
+        # lookup. Require a real directory inode, not just command success.
+        if ! details="$("$DEBUGFS" -R "stat $anchor" "$ROOTFS_IMG" 2>&1)" ||
+           ! grep -qE 'Inode:[[:space:]]+[1-9][0-9]*[[:space:]]+Type:[[:space:]]+directory([[:space:]]|$)' <<< "$details"; then
+            echo "[rootfs] FATAL: missing/non-directory granting anchor in image: $anchor" >&2
+            echo "$details" >&2
+            exit 1
+        fi
+    done
 }
 
 # ── Copy skeleton directory tree ─────────────────────────────────────────────
@@ -185,7 +225,7 @@ fi
 # Batch chmod
 if [[ -n "$CHMOD_CMDS" ]]; then
     echo "[rootfs] Setting permissions..."
-    printf "$CHMOD_CMDS" | $DEBUGFS -w "$ROOTFS_IMG" >/dev/null 2>&1
+    printf "$CHMOD_CMDS" | "$DEBUGFS" -w "$ROOTFS_IMG" >/dev/null 2>&1
 fi
 
 # ── Optional graphical assets (DESKTOP profile only) ─────────────────────────
@@ -230,6 +270,10 @@ fi
 # from the FAT ESP (esp.img carries boot/aegis.elf; see the Makefile $(ESP_IMG)
 # rule and gen-limine-conf.sh installed mode) — a rootfs /boot/aegis.elf would
 # be dead weight inside this LOGICAL 44 MiB image.
+
+# Check the final assembled layout, including any manifest/skeleton conflicts,
+# before truncation/publication. No anchor may be a symlink or ordinary file.
+validate_grant_anchors
 
 # ── Truncate trailing zero blocks ────────────────────────────────────────────
 # The fs is one block group (4 KiB blocks) so it has no backup superblocks in

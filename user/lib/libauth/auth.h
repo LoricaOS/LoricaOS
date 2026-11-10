@@ -24,8 +24,9 @@ int auth_check(const char *username, const char *password,
                int *uid, int *gid,
                char *home, int homelen, char *shell, int shelllen);
 
-/* Set process identity (setuid + setgid). */
-void auth_set_identity(int uid, int gid);
+/* Set process identity (setgid then setuid), after successful binding in this
+ * SAME process. Returns 0 on success, -1 on any failure; never exec on failure. */
+int auth_set_identity(int uid, int gid);
 
 /* Legacy stub from the pre-46c exec_caps model. The Phase 46c cap-policy
  * redesign moved capability declaration into /etc/aegis/caps.d/<binary>
@@ -34,12 +35,11 @@ void auth_set_identity(int uid, int gid);
  * libauth that still reference it don't have to be touched in lockstep. */
 void auth_grant_shell_caps(void);
 
-/* Mark the current session as authenticated AND bind the identity that
- * auth_set_identity may switch to. The kernel uses the authenticated flag to
- * grant admin-tier capabilities to processes spawned after login/unlock, and
- * binds (uid, gid) so a subsequent setuid/setgid may ONLY assume that verified
- * identity. MUST be called with the just-authenticated user's uid/gid, BEFORE
- * auth_set_identity. */
-void auth_elevate_session(int uid, int gid);
+/* Bind the just-authenticated identity in THIS process before switching it.
+ * Returns 0 on success, -1 on failure. This is NOT admin authorization.
+ * Independent children lose authentication/binding; authenticate -> bind ->
+ * setgid/setuid -> exec must remain in one process (no intervening fork).
+ * Admin executables must independently use the trusted login -elevate helper. */
+int auth_elevate_session(int uid, int gid);
 
 #endif /* AUTH_H */

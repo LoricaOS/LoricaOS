@@ -27,4 +27,4 @@ make
 rm -rf "$OUT"; mkdir -p "$OUT"
 cp make "$OUT/make"
 echo "[make] built -> $OUT/make"
-"$OUT/make" --version | head -1
+"$OUT/make" --version

@@ -2,8 +2,8 @@
  *
  * Authenticates via libauth.a, then execve's the user's shell.
  * Capabilities: AUTH and SETUID from kernel policy table (service tier).
- * After successful auth, calls auth_elevate_session() so the spawned
- * shell gets admin-tier caps from the policy table.
+ * Authentication, binding, identity switch and shell exec stay in this process.
+ * This does not authorize independent admin executables.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,8 +14,10 @@
 #include <termios.h>
 #include <sys/types.h>
 #include <sys/syscall.h>
+#include <sys/stat.h>
 
 #include "auth.h"
+#include "../../lib/libinstall/admin_targets.h"
 
 extern char **environ;
 
@@ -25,6 +27,12 @@ extern char **environ;
 #define SYS_ADMIN_SESSION 517
 #define ADMIN_CRED_FILE   "/etc/aegis/admin"
 
+static void wipe_secret(char *buf, size_t len)
+{
+    volatile char *p = buf;
+    while (len--) *p++ = 0;
+}
+
 /* Read a line from fd, stripping trailing newline. */
 static int
 readline(int fd, char *buf, int len)
@@ -33,17 +41,17 @@ readline(int fd, char *buf, int len)
     char c;
     while (i < len - 1) {
         int n = (int)read(fd, &c, 1);
-        if (n <= 0) return (i > 0) ? i : -1;
-        if (c == '\n' || c == '\r') break;
+        if (n <= 0) { buf[i] = '\0'; return -1; }
+        if (c == '\n' || c == '\r') { buf[i] = '\0'; return i; }
         buf[i++] = c;
     }
     buf[i] = '\0';
-    return i;
+    return -1; /* truncated line */
 }
 
 /*
  * do_elevate — `login -elevate`: verify the SEPARATE admin credential and ask the
- * kernel to elevate the PARENT shell to an admin session.
+ * kernel to elevate the direct PARENT executable to an admin session.
  *
  * This is the single trusted authority for admin elevation (the shell holds no
  * such power and runs no credential code). login already owns CAP_KIND_AUTH and
@@ -52,7 +60,7 @@ readline(int fd, char *buf, int len)
  * applies to login's parent (the shell that fork/exec'd us). Returns 0 on success.
  */
 static int
-do_elevate(void)
+verify_admin(int password_fd)
 {
     char stored[256];
     char password[128];
@@ -76,9 +84,9 @@ do_elevate(void)
         return 1;
     }
     n = (int)read(fd, stored, sizeof(stored) - 1);
-    close(fd);
-    if (n <= 0) {
-        dprintf(2, "login: admin credential is empty\n");
+    int closed = close(fd);
+    if (n <= 0 || n == (int)sizeof(stored) - 1 || closed != 0) {
+        dprintf(2, "login: cannot read complete admin credential\n");
         return 1;
     }
     stored[n] = '\0';
@@ -88,10 +96,10 @@ do_elevate(void)
 
     /* Prompt for the admin password with echo off (reuse login's pattern). */
     {
-        struct termios t;
-        int have_tty = (tcgetattr(0, &t) == 0);
+        struct termios t = {0};
+        int have_tty = password_fd == 0 && (tcgetattr(0, &t) == 0);
         struct termios t_raw = t;
-        int pi = 0;
+        int pi = 0, terminated = 0;
         char c;
 
         if (have_tty) {
@@ -100,25 +108,39 @@ do_elevate(void)
         }
         write(1, "admin password: ", 16);
         while (pi < (int)sizeof(password) - 1) {
-            int r = (int)read(0, &c, 1);
+            int r = (int)read(password_fd, &c, 1);
             if (r <= 0) break;
-            if (c == '\n' || c == '\r') break;
+            if (c == '\n' || c == '\r') { terminated = 1; break; }
             password[pi++] = c;
         }
         password[pi] = '\0';
         write(1, "\n", 1);
         if (have_tty)
             tcsetattr(0, TCSANOW, &t);
+        /* Refuse a truncated candidate instead of authenticating its prefix. */
+        if (!terminated) {
+            wipe_secret(password, sizeof(password));
+            wipe_secret(stored, sizeof(stored));
+            return 1;
+        }
     }
 
     ok = (auth_verify(password, stored) == 0);
-    memset(password, 0, sizeof(password));
+    wipe_secret(password, sizeof(password));
+    wipe_secret(stored, sizeof(stored));
     if (!ok) {
         dprintf(2, "login: admin authentication failed\n");
         sleep(FAIL_DELAY);   /* mandatory throttle, held under the elevate lock */
         return 1;
     }
 
+    return 0;
+}
+
+static int
+do_elevate(void)
+{
+    if (verify_admin(0) != 0) return 1;
     if (syscall(SYS_ADMIN_SESSION, 1L) != 0) {
         dprintf(2, "login: kernel denied elevation (missing ADMIN_AUTH?)\n");
         return 1;
@@ -126,9 +148,61 @@ do_elevate(void)
     return 0;
 }
 
+/* The separate admin credential authorizes principal 0, not the password of
+ * account uid 0. Never accept a shell, PATH search, arbitrary path or argv0. */
+static int
+do_admin_exec(int argc, char **argv)
+{
+    if (argc < 4 || !admin_target_caps(argv[2])) return 1;
+    const char *target = argv[2];
+    int arg = 3, password_fd = 0;
+    if (!strcmp(argv[arg], "--password-fd")) {
+        if (argc < 6) return 1;
+        char *end;
+        errno = 0;
+        long fd = strtol(argv[arg + 1], &end, 10);
+        struct stat st;
+        if (errno || !argv[arg + 1][0] || *end || fd < 3 || fd > 255 ||
+            fstat((int)fd, &st) != 0 || !S_ISFIFO(st.st_mode))
+            return 1;
+        password_fd = (int)fd;
+        arg += 2;
+    }
+    if (strcmp(argv[arg++], "--")) return 1;
+    if (verify_admin(password_fd) != 0) {
+        if (password_fd) close(password_fd);
+        return 1;
+    }
+    if (password_fd && close(password_fd) != 0) return 1;
+    /* No fork between verification and exec. Every step is mandatory. */
+    if (auth_elevate_session(0, 0) != 0 ||
+        auth_set_identity(0, 0) != 0 ||
+        syscall(521) != 0 || syscall(519) != 1) {
+        dprintf(2, "login: kernel denied administrative principal\n");
+        return 1;
+    }
+    /* Drop inherited GUI/IPC/disk descriptors. Aegis's FD table has 256 slots;
+     * do not carry the caller's loader/configuration environment into admin. */
+    for (int fd = 3; fd < 256; fd++) close(fd);
+    char *av[132];
+    int n = 0;
+    av[n++] = (char *)target;
+    av[n++] = ADMIN_READY_MARKER;
+    for (; arg < argc && n < 131; arg++) av[n++] = argv[arg];
+    if (arg != argc) return 1;
+    av[n] = NULL;
+    char *safe_env[] = { "PATH=/bin", "HOME=/", "USER=admin", "LOGNAME=admin",
+                         "TERM=xterm", NULL };
+    execve(target, av, safe_env);
+    dprintf(2, "login: administrative exec failed: %s (errno=%d)\n", target, errno);
+    return 1; /* Never fall back to a shell or another executable. */
+}
+
 int
 main(int argc, char **argv)
 {
+    if (argc > 1 && strcmp(argv[1], "--admin-exec") == 0)
+        return do_admin_exec(argc, argv);
     if (argc > 1 && strcmp(argv[1], "-elevate") == 0)
         return do_elevate();
 
@@ -159,20 +233,21 @@ main(int argc, char **argv)
         if (username[0] == '\0') { attempt--; continue; }
 
         /* Disable echo for password input */
-        struct termios t;
+        struct termios t = {0};
         tcgetattr(0, &t);
         struct termios t_raw = t;
         t_raw.c_lflag &= ~(unsigned)(ECHO | ICANON);
         tcsetattr(0, TCSANOW, &t_raw);
 
         write(1, "password: ", 10);
+        int password_complete = 0;
         {
             int pi = 0;
             char c;
             while (pi < (int)sizeof(password) - 1) {
                 int n = (int)read(0, &c, 1);
                 if (n <= 0) break;
-                if (c == '\n' || c == '\r') break;
+                if (c == '\n' || c == '\r') { password_complete = 1; break; }
                 if (c == '\x7f' || c == '\b') {
                     if (pi > 0) { pi--; write(1, "\b \b", 3); }
                     continue;
@@ -186,18 +261,26 @@ main(int argc, char **argv)
         tcsetattr(0, TCSANOW, &t);
 
         /* Authenticate */
-        if (auth_check(username, password, &uid, &gid,
+        if (!password_complete || auth_check(username, password, &uid, &gid,
                        home, (int)sizeof(home), shell, (int)sizeof(shell)) != 0) {
+            wipe_secret(password, sizeof(password));
             sleep(FAIL_DELAY);
             write(1, "Login incorrect\n", 16);
             continue;
         }
 
-        /* Success — elevate session (binds uid/gid), set identity, launch shell */
-        auth_elevate_session(uid, gid);
+        wipe_secret(password, sizeof(password));
+        /* No fork: an independent child would lose the authenticated binding. */
+        if (auth_elevate_session(uid, gid) != 0 ||
+            auth_set_identity(uid, gid) != 0) {
+            dprintf(2, "login: kernel denied authenticated identity\n");
+            return 1;
+        }
         write(1, "\033[2J\033[H", 7);
-        auth_set_identity(uid, gid);
-        chdir(home);
+        if (chdir(home) != 0) {
+            dprintf(2, "login: cannot enter home directory: %s\n", home);
+            return 1;
+        }
 
         setenv("HOME",    home,     1);
         setenv("USER",    username, 1);

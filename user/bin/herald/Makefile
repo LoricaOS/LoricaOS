@@ -12,8 +12,10 @@ CC       = $(MUSL_DIR)/usr/bin/musl-gcc
 HERALD_ARCH = x86_64
 
 CFLAGS  = -O2 -s -fno-pie -no-pie -Wall -Wextra -Wl,--build-id=none \
-          -DHERALD_ARCH='"$(HERALD_ARCH)"' -I$(BEARSSL)/include -I$(KEYDIR)
+          -DHERALD_ARCH='"$(HERALD_ARCH)"' -I$(BEARSSL)/include -I$(KEYDIR) \
+          -I../../lib/libinstall
 LDFLAGS = -static -no-pie -L$(BEARSSL)/lib -L$(BEARSSL)/lib64 -lbearssl
+LIBELEVATE = ../../lib/libinstall/libelevate.a
 
 SRCS = main.c tar.c verify.c manifest.c db.c net.c repo.c transaction.c
 HDRS = tar.h verify.h manifest.h db.h net.h repo.h transaction.h
@@ -24,8 +26,11 @@ HDRS = tar.h verify.h manifest.h db.h net.h repo.h transaction.h
 # rejects at exec ("not an ELF64 executable for this arch").
 OUT ?= herald.elf
 
-$(OUT): $(SRCS) $(HDRS)
-	$(CC) $(CFLAGS) -o $@ $(SRCS) $(LDFLAGS)
+$(OUT): $(SRCS) $(HDRS) $(LIBELEVATE)
+	$(CC) $(CFLAGS) -o $@ $(SRCS) $(LIBELEVATE) $(LDFLAGS)
+
+$(LIBELEVATE): ../../lib/libinstall/install_elevate.c ../../lib/libinstall/install_elevate.h ../../lib/libinstall/admin_targets.h
+	$(MAKE) -C ../../lib/libinstall libelevate.a CC="$(CC)"
 
 # Host-side parser regression checks (no musl, no BearSSL — plain cc). The
 # trusted key is stubbed since nothing under test verifies a signature.

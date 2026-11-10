@@ -4,365 +4,245 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <fcntl.h>
-#include <signal.h>   /* for SIGCHLD, struct sigaction, sigaction() */
+#include <signal.h>
+#include <termios.h>
+#include <errno.h>
 
-static long
-sys_setfg(long pid)
-{
-#ifdef __aarch64__
-    /* ARM64: Aegis custom syscall 360 (x86 number, passed directly) */
-    register long x8 __asm__("x8") = 360;
-    register long x0 __asm__("x0") = pid;
-    __asm__ volatile("svc #0" : "+r"(x0) : "r"(x8) : "memory");
-    return x0;
-#else
-    long ret;
-    __asm__ volatile(
-        "syscall"
-        : "=a"(ret)
-        : "0"(360L), "D"(pid)
-        : "rcx", "r11", "memory"
-    );
-    return ret;
-#endif
-}
+/* Small fallback shell for images without stsh. Deliberately no quoting,
+ * expansion, compound commands, or shell state bootstrap. */
+#define MAX_PIPELINE 6
+#define MAX_ARGV 16
+#define MAX_REDIR 16
+#define LINE_SIZE 512
 
-#define MAX_PIPELINE 6    /* max pipeline stages; (PROC_MAX_FDS-3)/2 = 6 */
-#define MAX_ARGV     16   /* max args per command */
-#define LINE_SIZE    512  /* input line buffer */
-
+typedef struct { int kind; char *path; } redir_t;
+enum { R_IN, R_OUT, R_APPEND, R_ERR_OUT };
 typedef struct {
-    char *argv[MAX_ARGV + 1]; /* NULL-terminated */
-    char *stdin_file;         /* path for < redirect, NULL if none */
-    char *stdout_file;        /* path for > redirect (ignored until Phase 19) */
-    int   stderr_to_stdout;   /* 1 if 2>&1 was specified */
+    char *argv[MAX_ARGV+1];
+    redir_t redirs[MAX_REDIR];
+    int nr;
 } cmd_t;
 
-static char *g_envp[] = { NULL };
+static char **g_envp;
+static int g_jobcontrol;
 
-/*
- * parse_command — tokenize a single command segment, pulling out redirects.
- * Modifies seg in-place (inserts NUL terminators).
- * Returns argc (number of argv entries, not counting the NULL terminator).
- */
 static int
 parse_command(char *seg, cmd_t *cmd)
 {
-    cmd->argv[0]        = NULL;
-    cmd->stdin_file     = NULL;
-    cmd->stdout_file    = NULL;
-    cmd->stderr_to_stdout = 0;
-
-    int argc = 0;
-    char *p  = seg;
-
+    memset(cmd,0,sizeof *cmd);
+    int argc=0;
+    char *p=seg;
     while (*p) {
-        /* Skip whitespace */
-        while (*p == ' ' || *p == '\t') p++;
-        if (!*p || *p == '\n') break;
-
-        /* 2>&1 — must check before single '>' */
-        if (p[0]=='2' && p[1]=='>' && p[2]=='&' && p[3]=='1') {
-            cmd->stderr_to_stdout = 1;
-            p += 4;
-            continue;
+        while (*p==' ' || *p=='\t') p++;
+        if (!*p || *p=='\n') break;
+        if (*p=='<' || *p=='>' || !strncmp(p,"2>&1",4)) {
+            if (cmd->nr==MAX_REDIR) return -1;
+            redir_t *r=&cmd->redirs[cmd->nr++];
+            if (!strncmp(p,"2>&1",4)) { r->kind=R_ERR_OUT; p+=4; continue; }
+            r->kind=*p=='<' ? R_IN : p[1]=='>' ? R_APPEND : R_OUT;
+            p+=r->kind==R_APPEND ? 2 : 1;
+            while (*p==' ' || *p=='\t') p++;
+            if (!*p || *p=='\n' || *p=='<' || *p=='>') return -1;
+            r->path=p;
+        } else {
+            if (argc==MAX_ARGV) return -1;
+            cmd->argv[argc++]=p;
         }
-
-        /* >> (append) — store path, mark no-op until Phase 19 */
-        if (p[0] == '>' && p[1] == '>') {
-            p += 2;
-            while (*p == ' ' || *p == '\t') p++;
-            cmd->stdout_file = p;
-            while (*p && *p != ' ' && *p != '\t' && *p != '\n') p++;
-            if (*p) *p++ = '\0';
-            continue;
-        }
-
-        /* > (truncate) */
-        if (*p == '>') {
-            p++;
-            while (*p == ' ' || *p == '\t') p++;
-            cmd->stdout_file = p;
-            while (*p && *p != ' ' && *p != '\t' && *p != '\n') p++;
-            if (*p) *p++ = '\0';
-            continue;
-        }
-
-        /* < (stdin redirect) */
-        if (*p == '<') {
-            p++;
-            while (*p == ' ' || *p == '\t') p++;
-            cmd->stdin_file = p;
-            while (*p && *p != ' ' && *p != '\t' && *p != '\n') p++;
-            if (*p) *p++ = '\0';
-            continue;
-        }
-
-        /* Regular argument */
-        if (argc >= MAX_ARGV) break;
-        cmd->argv[argc++] = p;
-        while (*p && *p != ' ' && *p != '\t' && *p != '\n') p++;
-        if (*p) *p++ = '\0';
+        while (*p && *p!=' ' && *p!='\t' && *p!='\n') p++;
+        if (*p) *p++='\0';
     }
-    cmd->argv[argc] = NULL;
     return argc;
 }
 
-/*
- * parse_pipeline — split line on '|' into up to max cmd_t entries.
- * Modifies line in-place. Returns number of stages (0 if line is empty).
- */
 static int
-parse_pipeline(char *line, cmd_t *cmds, int max)
+parse_pipeline(char *line, cmd_t *cmds)
 {
-    int n    = 0;
-    char *p  = line;
-    char *seg = line;
+    int n=0;
+    char *seg=line;
+    for (char *p=line;;p++) {
+        if (*p!='|' && *p) continue;
+        int more=*p=='|';
+        *p='\0';
+        if (n==MAX_PIPELINE) return -1;
+        int argc=parse_command(seg,&cmds[n]);
+        if (argc<0 || (!argc && (more || n))) return -1;
+        if (argc) n++;
+        if (!more) return n;
+        seg=p+1;
+    }
+}
 
-    while (*p) {
-        if (*p == '|') {
-            *p++ = '\0';
-            if (n < max) {
-                if (parse_command(seg, &cmds[n]) > 0)
-                    n++;
-            }
-            seg = p;
-        } else {
-            p++;
+static void
+close_fds(int fds[3])
+{
+    for (int i=0;i<3;i++) if (fds[i]>=0) { close(fds[i]); fds[i]=-1; }
+}
+
+/* All authority-gated opens and ordered snapshots happen before fork. */
+static int
+prepare(cmd_t *cmd, int fds[3], int input, int output)
+{
+    fds[0]=fds[1]=fds[2]=-1;
+    if (input>=0 && (fds[0]=dup(input))<0) goto fail;
+    if (output>=0 && (fds[1]=dup(output))<0) goto fail;
+    for (int i=0;i<cmd->nr;i++) {
+        redir_t *r=&cmd->redirs[i];
+        int target=r->kind==R_IN ? 0 : r->kind==R_ERR_OUT ? 2 : 1;
+        int fd=r->kind==R_ERR_OUT ? dup(fds[1]>=0 ? fds[1] : 1) :
+            open(r->path,r->kind==R_IN ? O_RDONLY : O_WRONLY|O_CREAT|
+                 (r->kind==R_APPEND ? O_APPEND : O_TRUNC),0644);
+        if (fd<0) {
+            dprintf(fds[2]>=0 ? fds[2] : 2,"shell: %s: %s\n",
+                    r->path ? r->path : "2>&1",strerror(errno));
+            close_fds(fds); return -1;
         }
+        if (fds[target]>=0) close(fds[target]);
+        fds[target]=fd;
     }
-    /* Last (or only) segment */
-    if (n < max && parse_command(seg, &cmds[n]) > 0)
-        n++;
-
-    return n;
+    return 0;
+fail:
+    perror("shell: descriptors"); close_fds(fds); return -1;
 }
 
-/*
- * exec_cmd — exec the command in cmds[i]. Never returns on success.
- * If the binary is not found, prints an error and calls _exit(127).
- */
-static void
-exec_cmd(cmd_t *cmd)
+static int
+install(int fds[3])
 {
-    char full[64];
-    if (cmd->argv[0][0] != '/') {
-        snprintf(full, sizeof(full), "/bin/%s", cmd->argv[0]);
-        execve(full, cmd->argv, g_envp);
-    } else {
-        execve(cmd->argv[0], cmd->argv, g_envp);
-    }
-    fprintf(stderr, "%s: not found\n", cmd->argv[0]);
-    _exit(127);
+    for (int i=0;i<3;i++) if (fds[i]>=0 && dup2(fds[i],i)<0) return -1;
+    return 0;
 }
 
-/*
- * run_pipeline — execute an N-stage pipeline.
- *
- * Creates N-1 pipes, forks N children with dup2 redirects, then:
- *   1. Parent closes all pipe fds (must happen before waitpid — otherwise
- *      parent holds write ends open and last-stage reader never gets EOF).
- *   2. Parent waits for all children in order.
- *
- * CRITICAL: every child closes ALL pipe fds after its dup2 redirects.
- * If a child retains the write end of a pipe it is also reading from,
- * write_refs stays > 1 and the child will never see EOF from that pipe.
- */
 static void
+exec_cmd(char **argv)
+{
+    char path[256];
+    if (strchr(argv[0],'/')) execve(argv[0],argv,g_envp);
+    else if (snprintf(path,sizeof path,"/bin/%s",argv[0])<(int)sizeof path)
+        execve(path,argv,g_envp);
+    /* Return only on failure. Fork callers must exit without writing; an
+     * in-process `exec` builtin still has authority to report its own error. */
+}
+
+static int
+wait_child(pid_t pid)
+{
+    int st;
+    while (waitpid(pid,&st,0)<0) {
+        if (errno==EINTR) continue;
+        perror("shell: waitpid"); return 1;
+    }
+    int rc=WIFEXITED(st) ? WEXITSTATUS(st) :
+           WIFSIGNALED(st) ? 128+WTERMSIG(st) : 1;
+    if (rc==125 || rc==127)
+        fprintf(stderr,"shell: child setup/exec failed or command returned %d\n",rc);
+    return rc;
+}
+
+static int
 run_pipeline(cmd_t *cmds, int n)
 {
-    int pipes[MAX_PIPELINE - 1][2];
-    int i, j;
-
-    /* Create n-1 pipes */
-    for (i = 0; i < n - 1; i++) {
-        if (pipe(pipes[i]) < 0) {
-            perror("pipe");
-            /* Clean up already-opened pipes */
-            for (j = 0; j < i; j++) {
-                close(pipes[j][0]);
-                close(pipes[j][1]);
-            }
-            return;
-        }
-    }
-
+    int pipes[MAX_PIPELINE-1][2], np=0, launched=0;
     pid_t pids[MAX_PIPELINE];
-
-    for (i = 0; i < n; i++) {
-        pid_t pid = fork();
-        if (pid < 0) {
-            perror("fork");
-            /* Close remaining pipes and wait for already-forked children */
-            for (j = i; j < n - 1; j++) {
-                close(pipes[j][0]);
-                close(pipes[j][1]);
+    for (;np<n-1;np++) if (pipe(pipes[np])<0) { perror("shell: pipe"); goto fail; }
+    fflush(NULL);
+    for (int i=0;i<n;i++) {
+        int fds[3];
+        if (prepare(&cmds[i],fds,i ? pipes[i-1][0] : -1,
+                    i<n-1 ? pipes[i][1] : -1)<0) goto fail;
+        pid_t pid=fork();
+        if (!pid) {
+            if (install(fds)<0) _exit(125);
+            close_fds(fds);
+            for (int j=0;j<np;j++) { close(pipes[j][0]); close(pipes[j][1]); }
+            if (g_jobcontrol && setpgid(0,i ? pids[0] : 0)<0) _exit(125);
+            if (g_jobcontrol) {
+                struct sigaction sa;
+                memset(&sa,0,sizeof sa); sa.sa_handler=SIG_DFL;
+                if (sigaction(SIGTTOU,&sa,NULL)<0) _exit(125);
             }
-            int st;
-            for (j = 0; j < i; j++)
-                waitpid(pids[j], &st, 0);
-            return;
+            exec_cmd(cmds[i].argv);
+            _exit(127);
         }
-
-        if (pid == 0) {
-            /* ── Child process ── */
-
-            /* Wire stdin from previous pipe */
-            if (i > 0)
-                dup2(pipes[i-1][0], STDIN_FILENO);
-
-            /* Wire stdout to next pipe */
-            if (i < n - 1)
-                dup2(pipes[i][1], STDOUT_FILENO);
-
-            /* < stdin redirect */
-            if (cmds[i].stdin_file) {
-                int fd = open(cmds[i].stdin_file, O_RDONLY);
-                if (fd < 0) {
-                    fprintf(stderr, "%s: cannot open\n", cmds[i].stdin_file);
-                    _exit(1);
-                }
-                dup2(fd, STDIN_FILENO);
-                close(fd);
-            }
-
-            /* > stdout redirect — create/truncate the output file */
-            if (cmds[i].stdout_file && i == n - 1) {
-                int fd = open(cmds[i].stdout_file,
-                              O_WRONLY | O_CREAT | O_TRUNC, 0644);
-                if (fd < 0) {
-                    fprintf(stderr, "%s: cannot open for writing\n",
-                            cmds[i].stdout_file);
-                    _exit(1);
-                }
-                dup2(fd, STDOUT_FILENO);
-                close(fd);
-            }
-
-            /* 2>&1 */
-            if (cmds[i].stderr_to_stdout)
-                dup2(STDOUT_FILENO, STDERR_FILENO);
-
-            /* CRITICAL: close all pipe fds in the child.
-             * Without this, a child reading from pipes[i-1][0] that also
-             * holds pipes[i-1][1] open will never see EOF after the writer
-             * exits (write_refs stays > 0 because the child holds it). */
-            for (j = 0; j < n - 1; j++) {
-                close(pipes[j][0]);
-                close(pipes[j][1]);
-            }
-
-            exec_cmd(&cmds[i]);
-            _exit(127);   /* unreachable if exec succeeds */
+        close_fds(fds);
+        if (pid<0) { perror("shell: fork"); goto fail; }
+        pids[launched++]=pid;
+        if (g_jobcontrol && setpgid(pid,pids[0])<0 && errno!=EACCES && errno!=ESRCH) {
+            perror("shell: setpgid"); goto fail;
         }
-
-        pids[i] = pid;
     }
+    for (int j=0;j<np;j++) { close(pipes[j][0]); close(pipes[j][1]); }
+    int tty=g_jobcontrol && isatty(0);
+    pid_t oldfg=tty ? tcgetpgrp(0) : -1;
+    if (tty && tcsetpgrp(0,pids[0])<0) perror("shell: foreground");
+    int rc=1;
+    for (int i=0;i<n;i++) rc=wait_child(pids[i]);
+    if (oldfg>=0 && tcsetpgrp(0,oldfg)<0) perror("shell: restore foreground");
+    return rc;
+fail:
+    for (int j=0;j<np;j++) { close(pipes[j][0]); close(pipes[j][1]); }
+    for (int j=0;j<launched;j++)
+        if (kill(pids[j],SIGKILL)<0 && errno!=ESRCH) perror("shell: kill");
+    for (int j=0;j<launched;j++) wait_child(pids[j]);
+    return 1;
+}
 
-    /* ── Parent: close all pipe fds after all children are forked ──
-     * Must happen before waitpid — if parent holds write ends open,
-     * the last-stage reader (cat, etc.) never gets EOF and hangs. */
-    for (j = 0; j < n - 1; j++) {
-        close(pipes[j][0]);
-        close(pipes[j][1]);
+static int
+run_line(char *line)
+{
+    cmd_t cmds[MAX_PIPELINE];
+    int n=parse_pipeline(line,cmds);
+    if (n<0) { fprintf(stderr,"shell: invalid or excessive command/pipeline\n"); return 2; }
+    if (!n) return 0;
+    if (n==1 && !strcmp(cmds[0].argv[0],"exec") && cmds[0].argv[1]) {
+        int fds[3];
+        if (prepare(&cmds[0],fds,-1,-1)<0) return 1;
+        if (install(fds)<0) { perror("shell: exec descriptors"); close_fds(fds); return 1; }
+        close_fds(fds);
+        exec_cmd(&cmds[0].argv[1]);
+        perror("shell: exec");
+        return 127;
     }
-
-    /* Register the last stage as foreground process so Ctrl-C sends SIGINT to it.
-     * Use pids[n-1] (last stage) for single-command and for the terminal stage
-     * of a pipeline (the stage the user interacts with). */
-    sys_setfg((long)pids[n - 1]);
-
-    /* Wait for all children in order */
-    int status;
-    for (i = 0; i < n; i++)
-        waitpid(pids[i], &status, 0);
-
-    /* Clear foreground process after all children exit */
-    sys_setfg(0);
+    if (n==1 && !cmds[0].nr) {
+        char **av=cmds[0].argv;
+        if (!strcmp(av[0],"exit")) exit(av[1] ? atoi(av[1]) : 0);
+        if (!strcmp(av[0],"cd")) {
+            if (chdir(av[1] ? av[1] : "/")<0) { perror("cd"); return 1; }
+            return 0;
+        }
+        if (!strcmp(av[0],"help")) { puts("Builtins: cd [path], exit [n], exec command, help"); return 0; }
+    }
+    return run_pipeline(cmds,n);
 }
 
 int
-main(int argc, char **argv)
+main(int argc, char **argv, char **envp)
 {
-    char  line[LINE_SIZE];
-    cmd_t cmds[MAX_PIPELINE];
-
-    /* -c <command>: execute a single command string and exit.
-     * Used by vigil start_service: execv("/bin/sh", ["/bin/sh", "-c", cmd, NULL]).
-     * We do NOT print the shell banner in -c mode. */
-    if (argc >= 3 && strcmp(argv[1], "-c") == 0) {
-        /* Copy command string into mutable buffer for parse_pipeline */
-        strncpy(line, argv[2], sizeof(line) - 1);
-        line[sizeof(line) - 1] = '\0';
-        int n = parse_pipeline(line, cmds, MAX_PIPELINE);
-        if (n == 0)
-            return 0;
-        /* Handle exec builtin: replace shell with the target program */
-        if (n == 1 && strcmp(cmds[0].argv[0], "exec") == 0 && cmds[0].argv[1]) {
-            char full[256];
-            char *prog = cmds[0].argv[1];
-            /* Shift argv: exec's argv[1..] becomes the new argv[0..] */
-            char **exec_argv = &cmds[0].argv[1];
-            if (prog[0] != '/') {
-                snprintf(full, sizeof(full), "/bin/%s", prog);
-                execve(full, exec_argv, g_envp);
-            } else {
-                execve(prog, exec_argv, g_envp);
-            }
-            perror(prog);
-            return 127;
-        }
-        run_pipeline(cmds, n);
-        return 0;
+    g_envp=envp;
+    /* Reserve standard descriptors before any internal allocation. If the
+     * launcher closed one, restoring /dev/null here requires parent authority. */
+    for (int i=0;i<3;i++) if (fcntl(i,F_GETFD)<0) {
+        if (errno!=EBADF) { perror("shell: standard descriptor"); return 1; }
+        int fd=open("/dev/null",i==0 ? O_RDONLY : O_WRONLY);
+        if (fd<0 || (fd!=i && dup2(fd,i)<0)) { perror("shell: /dev/null"); return 1; }
+        if (fd!=i) close(fd);
     }
-
-    printf("[SHELL] LoricaOS shell ready\n");
-
-    /* Prevent SIGCHLD from terminating the shell.
-     * signal_deliver already treats SIGCHLD SIG_DFL as ignore, but
-     * install SIG_IGN explicitly as a defence-in-depth measure. */
-    {
-        struct sigaction sa_chld;
-        __builtin_memset(&sa_chld, 0, sizeof(sa_chld));
-        sa_chld.sa_handler = SIG_IGN;
-        sigaction(SIGCHLD, &sa_chld, NULL);
+    char line[LINE_SIZE];
+    if (argc>=3 && !strcmp(argv[1],"-c")) {
+        if (strlen(argv[2])>=sizeof line) { fprintf(stderr,"shell: command too large\n"); return 2; }
+        strcpy(line,argv[2]);
+        return run_line(line);
     }
-
+    g_jobcontrol=isatty(0);
+    if (g_jobcontrol) {
+        struct sigaction sa;
+        memset(&sa,0,sizeof sa); sa.sa_handler=SIG_IGN;
+        sigaction(SIGTTOU,&sa,NULL);
+    }
+    puts("[SHELL] LoricaOS shell ready");
+    int status=0;
     for (;;) {
-        write(1, "# ", 2);
-        if (!fgets(line, sizeof(line), stdin))
-            break;
-
-        /* Strip trailing newline */
-        int len = (int)strlen(line);
-        if (len > 0 && line[len - 1] == '\n')
-            line[len - 1] = '\0';
-
-        int n = parse_pipeline(line, cmds, MAX_PIPELINE);
-        if (n == 0)
-            continue;
-
-        /* Builtins: only for a single command with no stdin redirect.
-         * A builtin in a pipeline (echo foo | cd) prints an error. */
-        if (n == 1 && !cmds[0].stdin_file && !cmds[0].stderr_to_stdout) {
-            if (strcmp(cmds[0].argv[0], "exit") == 0) {
-                int code = cmds[0].argv[1] ? atoi(cmds[0].argv[1]) : 0;
-                exit(code);
-            }
-            if (strcmp(cmds[0].argv[0], "cd") == 0) {
-                const char *path = cmds[0].argv[1] ? cmds[0].argv[1] : "/";
-                if (chdir(path) != 0)
-                    perror(path);
-                continue;
-            }
-            if (strcmp(cmds[0].argv[0], "help") == 0) {
-                puts("Builtins: cd [path], exit [n], help");
-                puts("Other commands are in /bin/");
-                continue;
-            }
-        }
-
-        run_pipeline(cmds, n);
+        if (write(1,"# ",2)<0) break;
+        if (!fgets(line,sizeof line,stdin)) break;
+        status=run_line(line);
     }
-    return 0;
+    return status;
 }

@@ -324,16 +324,13 @@ int main(int argc, char **argv)
     char *finish_argv[] = { "/bin/herald", "recover", "complete", NULL };
     int rc = 1, pending;
 
+    if (install_admin_enter("/bin/lorica-update", &argc, &argv, NULL) != 0) {
+        fprintf(stderr, "lorica-update: authentication failed\n");
+        return 1;
+    }
     if (argc > 2) {
         fprintf(stderr, "usage: lorica-update [disk]\n");
         return 2;
-    }
-    if (choose_disk(&disk, argc == 2 ? argv[1] : NULL) == -2) {
-        printf("lorica-update: administrator authentication required\n");
-        if (install_elevate(NULL) != 0) {
-            fprintf(stderr, "lorica-update: authentication failed\n");
-            return 1;
-        }
     }
     if (choose_disk(&disk, argc == 2 ? argv[1] : NULL) != 0) {
         fprintf(stderr, "lorica-update: specify the single installed raw disk\n");

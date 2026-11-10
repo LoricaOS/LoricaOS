@@ -34,6 +34,7 @@
 #include "net.h"
 #include "repo.h"
 #include "transaction.h"
+#include "install_elevate.h"
 #include "trusted_key.h"   /* static const unsigned char herald_trusted_key[65] */
 
 #define HERALD_CACHE_DIR "/var/lib/herald/cache"
@@ -1078,6 +1079,29 @@ static void usage(void)
 
 int main(int argc, char **argv)
 {
+    /* A loop marker is not authority. Validate it against live kernel state
+     * before stripping; ordinary read-only invocations never enter login. */
+    if (argc > 1 && !strcmp(argv[1], "--admin-ready") &&
+        install_admin_enter("/bin/herald", &argc, &argv, NULL) != 0)
+        return 1;
+    if (argc < 2) { usage(); return 2; }
+    if (argc == 2 && !strcmp(argv[1], "list")) return cmd_list();
+    if (argc == 3 && !strcmp(argv[1], "verify")) return cmd_verify(argv[2]);
+    if (argc == 3 && !strcmp(argv[1], "info")) return cmd_info(argv[2]);
+    if (argc == 3 && !strcmp(argv[1], "search")) return cmd_search(argv[2]);
+    int mutating =
+        (argc == 2 && !strcmp(argv[1], "sync")) ||
+        ((argc == 2 || argc == 3) && !strcmp(argv[1], "upgrade")) ||
+        (argc == 3 && (!strcmp(argv[1], "install") || !strcmp(argv[1], "remove"))) ||
+        (argc == 3 && !strcmp(argv[1], "recover") &&
+         (!strcmp(argv[2], "complete") || !strcmp(argv[2], "rollback")));
+    if (!mutating) { usage(); return 2; }
+    if (install_admin_enter("/bin/herald", &argc, &argv, NULL) != 0) {
+        fprintf(stderr, "herald: administrator authorization failed\n");
+        return 1;
+    }
+    /* Recovery can write or roll back files: it must never precede auth or
+     * run as a hidden side effect of list/search/info/verify. */
     int recovery = txn_recover();
     if (recovery == 1 && argc == 3 && strcmp(argv[1], "recover") == 0) {
         int rc = strcmp(argv[2], "complete") == 0 ? txn_finalize() :
@@ -1096,22 +1120,11 @@ int main(int argc, char **argv)
                         "lorica-update, or 'herald recover rollback'\n");
         return 1;
     }
-    if (argc < 2) {
-        usage();
-        return 2;
-    }
-    if (strcmp(argv[1], "list") == 0) {
-        return cmd_list();
-    }
     if (strcmp(argv[1], "sync") == 0) {
         return cmd_sync();
     }
     if (strcmp(argv[1], "upgrade") == 0) {
         return cmd_upgrade(argc >= 3 ? argv[2] : NULL);
-    }
-    if (argc < 3) {
-        usage();
-        return 2;
     }
     if (strcmp(argv[1], "install") == 0) {
         /* A path ending in .hpkg is a local file; anything else is a repo
@@ -1120,17 +1133,8 @@ int main(int argc, char **argv)
                    ? cmd_install(argv[2])
                    : cmd_install_named(argv[2]);
     }
-    if (strcmp(argv[1], "verify") == 0) {
-        return cmd_verify(argv[2]);
-    }
-    if (strcmp(argv[1], "info") == 0) {
-        return cmd_info(argv[2]);
-    }
     if (strcmp(argv[1], "remove") == 0) {
         return cmd_remove(argv[2]);
-    }
-    if (strcmp(argv[1], "search") == 0) {
-        return cmd_search(argv[2]);
     }
     usage();
     return 2;

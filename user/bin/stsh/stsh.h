@@ -25,12 +25,15 @@
 #define MAX_TOKENS      256   /* max lexer tokens per line */
 #define LEX_ARENA       8192  /* expanded-word scratch arena per line */
 #define MAX_PARAMS      64    /* positional parameters $1..$n */
+#define STSH_STATE_MAX  65536 /* encoded argv bootstrap, including terminating NUL */
+#ifndef STSH_PATH
+#define STSH_PATH "/bin/stsh"
+#endif
 
 /* ── Syscall numbers ── */
 
 #define SYS_CAP_QUERY   362
 #define SYS_SPAWN       514
-#define SYS_SETFG       360
 
 /* ── Types ── */
 
@@ -39,16 +42,20 @@ typedef struct {
     unsigned int rights;
 } cap_slot_t;
 
+typedef enum { R_IN, R_OUT, R_APPEND, R_ERR, R_ERR_OUT, R_DUP, R_HERE } redir_kind;
+typedef struct {
+    redir_kind kind;
+    char *text;
+} redir_t;
+#define MAX_REDIR 32
+
 typedef struct {
     char *argv[MAX_ARGV + 1]; /* NULL-terminated */
     int   argc;
-    char *stdin_file;         /* path for < redirect, NULL if none */
-    char *stdout_file;        /* path for > redirect, NULL if none */
-    int   stdout_append;      /* 1 if >> (append), 0 if > (truncate) */
-    char *stderr_file;        /* path for 2> redirect, NULL if none */
-    int   stderr_to_stdout;   /* 1 if 2>&1 was specified */
-    int   stdout_dup_to;      /* target fd for >&N (0 = none) */
-    char *heredoc_body;       /* literal body for << redirect, NULL if none */
+    redir_t redirs[MAX_REDIR]; /* lexical order, including repeated redirects */
+    int nredirs;
+    char *bootstrap;          /* fresh interpreter payload, never authority */
+    int external_only;        /* `command`: bypass functions during preparation */
 } cmd_t;
 
 /* ── lexer.c ── */
@@ -76,12 +83,17 @@ void sh_capture(const char *cmd, char *buf, int *used, int cap);
 /* ── run.c ── */
 
 extern int g_last_exit;
+extern int g_jobcontrol;
+extern int g_tty_fd;           /* private controlling descriptor, never exec'd */
 
 void run_set_params(const char *arg0, char **params, int nparams);
 int  run_program(const char *text);              /* lex+parse+exec a whole program */
 int  run_line(const char *line);                 /* alias for run_program */
 int  run_script(const char *path, char **argv_from, int argc_from);
 int  sh_incomplete(const char *buf);             /* interactive: needs more input? */
+int  run_bootstrap(const char *payload);
+int  run_expand_redirect(const char *raw, char *out, int cap);
+int  command_bootstrap(cmd_t *cmd);
 
 /* ── env.c ── */
 
@@ -119,17 +131,19 @@ int  grant_builtin(int argc, char **argv);
 int  sandbox_builtin(int argc, char **argv, char **envp);
 int  admin_builtin(int argc, char **argv);
 int  deadmin_builtin(void);
-int  stsh_admin_active(void);   /* 1 if this shell session is elevated */
 
 /* ── exec.c ── */
 
 void run_pipeline(cmd_t *cmds, int n, char **envp, int *last_exit);
-void run_pipeline_bg(cmd_t *cmds, int n, char **envp);
-int  try_builtin(cmd_t *cmds, int n, int *last_exit);
+int  run_pipeline_bg(cmd_t *cmds, int n, char **envp);
+int  redir_prepare(const cmd_t *cmd, int fds[3], int input, int output);
+int  redir_install(const int fds[3]);
+void redir_close(int fds[3]);
+int  sh_save_fd(int fd);       /* duplicate into the private namespace (>2) */
+int  sh_wait(pid_t pid, const char *name);
+void sh_reap_background(void);
 
-/* Materialize a heredoc body into a readable fd (writes to a pipe, returns the
- * read end). Body is capped at the pipe buffer so the single-process write
- * never blocks. Returns -1 on failure. */
+/* Parent-only bounded pipe preparation. Oversized bodies fail, never truncate. */
 int  heredoc_stdin(const char *body);
 
 #endif /* STSH_H */

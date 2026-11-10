@@ -117,7 +117,7 @@ int install_write_credentials(const char *username,
 
     /* /etc/passwd — primary user, uid 0, home /home/<user>. */
     {
-        int fd = open("/etc/passwd", O_WRONLY | O_CREAT | O_TRUNC);
+        int fd = open("/etc/passwd", O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd < 0)
             return -1;
         char line[256];
@@ -125,24 +125,24 @@ int install_write_credentials(const char *username,
                          "%s:x:0:0:%s:/home/%s:/bin/stsh\n",
                          username, username, username);
         if (write(fd, line, (size_t)n) != n) { close(fd); return -1; }
-        close(fd);
+        if (close(fd) != 0) return -1;
     }
 
     /* /etc/shadow */
     {
-        int fd = open("/etc/shadow", O_WRONLY | O_CREAT | O_TRUNC);
+        int fd = open("/etc/shadow", O_WRONLY | O_CREAT | O_TRUNC, 0600);
         if (fd < 0)
             return -1;
         char line[512];
         int n = snprintf(line, sizeof(line),
                          "%s:%s:19814:0:99999:7:::\n", username, user_hash);
         if (write(fd, line, (size_t)n) != n) { close(fd); return -1; }
-        close(fd);
+        if (close(fd) != 0) return -1;
     }
 
     /* /etc/group — primary group gid 0; the user is also in wheel. */
     {
-        int fd = open("/etc/group", O_WRONLY | O_CREAT | O_TRUNC);
+        int fd = open("/etc/group", O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd < 0)
             return -1;
         char line[256];
@@ -150,29 +150,30 @@ int install_write_credentials(const char *username,
                          "%s:x:0:%s\nwheel:x:999:%s\n",
                          username, username, username);
         if (write(fd, line, (size_t)n) != n) { close(fd); return -1; }
-        close(fd);
+        if (close(fd) != 0) return -1;
     }
 
     /* /etc/aegis/admin — the admin-elevation credential `login -elevate`
      * verifies (the separate admin hash if one was chosen, else the user's). */
     {
-        int fd = open("/etc/aegis/admin", O_WRONLY | O_CREAT | O_TRUNC);
+        int fd = open("/etc/aegis/admin", O_WRONLY | O_CREAT | O_TRUNC, 0600);
         if (fd < 0)
             return -1;
         char line[256];
         int n = snprintf(line, sizeof(line), "%s\n", admin_hash);
         if (write(fd, line, (size_t)n) != n) { close(fd); return -1; }
-        close(fd);
+        if (close(fd) != 0) return -1;
     }
 
     /* Lock down /etc/shadow + the admin credential (0600); passwd/group stay
      * world-readable. The kernel ignores open()'s mode arg (the VFS hardcodes
      * 0644 on O_CREAT), so set the modes explicitly. Runs before the pre-copy
      * sync() so the new inode modes reach the installed disk. */
-    chmod("/etc/shadow", 0600);
-    chmod("/etc/passwd", 0644);
-    chmod("/etc/group", 0644);
-    chmod("/etc/aegis/admin", 0600);
+    if (chmod("/etc/shadow", 0600) != 0 ||
+        chmod("/etc/passwd", 0644) != 0 ||
+        chmod("/etc/group", 0644) != 0 ||
+        chmod("/etc/aegis/admin", 0600) != 0)
+        return -1;
 
     /* Home directory for the primary user (owned by uid 0). The passwd line
      * points at /home/<username>; without this the user logs into a missing
@@ -180,7 +181,8 @@ int install_write_credentials(const char *username,
     {
         char home[80];
         snprintf(home, sizeof(home), "/home/%s", username);
-        install_make_home(home, 0, 0);
+        if (install_make_home(home, 0, 0) != 0)
+            return -1;
     }
 
     return 0;
@@ -188,21 +190,40 @@ int install_write_credentials(const char *username,
 
 /* ── Public: install_make_home ──────────────────────────────────────── */
 
+static int ensure_directory(const char *path)
+{
+    struct stat st;
+    if (mkdir(path, 0755) != 0 && errno != EEXIST)
+        return -1;
+    /* Do not accept a file or symlink planted at an existing home path. */
+    return lstat(path, &st) == 0 && S_ISDIR(st.st_mode) ? 0 : -1;
+}
+
+static int set_directory_owner(const char *path, int uid, int gid)
+{
+    struct stat st;
+    if (lstat(path, &st) != 0 || !S_ISDIR(st.st_mode))
+        return -1;
+    /* A no-op chown still needs authority; primary uid 0 homes commonly
+     * already have precisely the requested owner. */
+    if (st.st_uid == (uid_t)uid && st.st_gid == (gid_t)gid)
+        return 0;
+    return chown(path, uid, gid);
+}
+
 int install_make_home(const char *home, int uid, int gid)
 {
-    if (!home || !home[0])
+    if (!home || !home[0] || uid < 0 || gid < 0)
         return -1;
-    mkdir("/home", 0755);                       /* parent; may already exist */
-    if (mkdir(home, 0755) != 0 && errno != EEXIST)
-        return -1;
-    if (chown(home, uid, gid) != 0)
-        return -1;
-    /* Standard user dir. The compositor drops screenshots in Pictures/screenshots
-     * (creating that subdir on demand); pre-create Pictures so it's there from the
-     * first login, owned by the user. */
     char pics[128];
-    snprintf(pics, sizeof pics, "%s/Pictures", home);
-    if (mkdir(pics, 0755) == 0 || errno == EEXIST)
-        chown(pics, uid, gid);
-    return 0;
+    int n = snprintf(pics, sizeof(pics), "%s/Pictures", home);
+    if (n < 0 || n >= (int)sizeof(pics))
+        return -1;
+    /* Create the entire tree while we still own the parent; transfer children
+     * first, home last. Every failure is visible to the provisioning caller. */
+    if (ensure_directory("/home") != 0 ||
+        ensure_directory(home) != 0 || ensure_directory(pics) != 0 ||
+        set_directory_owner(pics, uid, gid) != 0)
+        return -1;
+    return set_directory_owner(home, uid, gid);
 }

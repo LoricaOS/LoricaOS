@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <sys/syscall.h>
+#include "../../lib/libinstall/admin_targets.h"
 
 #define SYS_CAP_QUERY      362
 #define SYS_SPAWN          514
@@ -234,77 +235,54 @@ grant_builtin(int argc, char **argv)
     return 1;
 }
 
-/* ── admin session (sudo-style elevation) ──────────────────────────────────
- *
- * `admin` elevates THIS shell session to an administrative session after
- * verifying a SEPARATE admin credential (/etc/aegis/admin) — even root must
- * authenticate. Anything the shell then spawns (herald) inherits the admin
- * session and so may hold CAP_KIND_INSTALL. `deadmin` drops it. The kernel
- * gates the elevation syscall on CAP_KIND_ADMIN_AUTH (held by stsh); the
- * credential check happens here in userspace, mirroring login + sys_auth_session. */
-
-static int s_admin_session = 0;
-
-int
-stsh_admin_active(void)
-{
-    return s_admin_session;
-}
+/* Command-scoped authentication. The shell never claims an inherited admin
+ * session: login authenticates and authorizes its exact allowlisted target.
+ * Neither this UX nor the fresh-interpreter state protocol carries authority. */
 
 int
 admin_builtin(int argc, char **argv)
 {
-    extern char **environ;
-    pid_t pid;
-    int status = 0;
-    (void)argc; (void)argv;
-
-    if (s_admin_session) {
-        puts("admin: session already elevated");
-        return 0;
-    }
-
-    /* Delegate to the trusted authenticator. /bin/login -elevate verifies the
-     * SEPARATE admin credential and asks the kernel to elevate THIS shell — login
-     * runs as our child, so the kernel applies the grant to us, its parent. The
-     * shell holds NO elevation authority (no ADMIN_AUTH cap) and runs no
-     * credential code; concentrating both in login keeps the surface minimal. */
-    pid = fork();
-    if (pid < 0) {
-        perror("admin: fork");
+    if (argc<2 || argc>MAX_ARGV-2) {
+        fprintf(stderr,"usage: admin command [args...]\n"
+                "Authenticates one allowlisted administrative tool; shell sessions and\n"
+                "commands do not inherit administrative authority.\n");
         return 1;
     }
-    if (pid == 0) {
-        char *av[] = { "/bin/login", "-elevate", NULL };
-        execve("/bin/login", av, environ);
-        _exit(127);
+    char path[256];
+    if (strchr(argv[1],'/')) {
+        if (snprintf(path,sizeof path,"%s",argv[1])>=(int)sizeof path) return 1;
+    } else if (!strcmp(argv[1],"gui-installer")) {
+        if (snprintf(path,sizeof path,"%s",ADMIN_GUI_INSTALLER_TARGET)>=(int)sizeof path) return 1;
+    } else {
+        if (snprintf(path,sizeof path,"/bin/%s",argv[1])>=(int)sizeof path) return 1;
     }
-    if (waitpid(pid, &status, 0) < 0) {
-        perror("admin: waitpid");
+    if (!admin_target_caps(path)) {
+        fprintf(stderr,"admin: command is not an allowlisted administrative tool\n");
         return 1;
     }
-    /* login exits 0 only on a verified elevation (which set our admin_session). */
-    if (!((status & 0x7f) == 0 && ((status >> 8) & 0xff) == 0))
-        return 1;   /* login already reported the reason */
-
-    s_admin_session = 1;
-    /* Emit a private OSC so a Lumen terminal tints this window's titlebar red.
-     * Unknown OSC is ignored by other terminals → safe everywhere. BEL (\007)
-     * terminated; glyph_term's OSC parser matches this. */
-    fputs("\033]777;admin;1\007", stdout);
-    fflush(stdout);
-    puts("admin session active — package management unlocked. Run 'deadmin' to drop.");
-    return 0;
+    /* Never PATH-search authentication targets or manufacture ready markers.
+     * login is the authoritative fixed-path allowlist and credential boundary. */
+    cmd_t cmd={0};
+    cmd.argv[cmd.argc++]="/bin/login";
+    cmd.argv[cmd.argc++]="--admin-exec";
+    cmd.argv[cmd.argc++]=path;
+    cmd.argv[cmd.argc++]="--";
+    for (int i=2;i<argc;i++) cmd.argv[cmd.argc++]=argv[i];
+    int status;
+    run_pipeline(&cmd,1,env_as_array(),&status);
+    return status;
 }
 
 int
 deadmin_builtin(void)
 {
-    syscall(SYS_ADMIN_SESSION, 0L);
-    s_admin_session = 0;
+    if (syscall(SYS_ADMIN_SESSION, 0L)<0) {
+        perror("deadmin: drop shell session");
+        return 1;
+    }
     /* Drop the Lumen red-toolbar tint (mirror of admin_builtin). */
     fputs("\033]777;admin;0\007", stdout);
     fflush(stdout);
-    puts("admin session dropped.");
+    puts("shell admin session dropped; independently authorized commands are unchanged.");
     return 0;
 }
