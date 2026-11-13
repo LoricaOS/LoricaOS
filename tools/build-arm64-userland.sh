@@ -38,12 +38,25 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 MUSL_VER="1.2.5"
-MUSL_SRC="$REPO/references/musl-$MUSL_VER"
+MUSL_SRC="$REPO/build/musl-arm64-source/musl-$MUSL_VER"
 MUSL_TAR="$REPO/references/musl-$MUSL_VER.tar.gz"
 SYSROOT="$REPO/build/musl-arm64"
 SYSROOT_USR="$SYSROOT/usr"
 CC_WRAPPER="$SYSROOT/bin/aarch64-musl-gcc"
 BLOB_OUT="$REPO/build/blobs-arm64"
+PATCH_HELPER="$REPO/tools/patch-musl-aegis.py"
+RECIPE_ID="$(python3 - "$0" "$PATCH_HELPER" <<'PY'
+import hashlib
+from pathlib import Path
+import sys
+h = hashlib.sha256()
+for name in sys.argv[1:]:
+    h.update(Path(name).read_bytes())
+    h.update(b'\0')
+print(h.hexdigest())
+PY
+)"
+STAMP="$SYSROOT/.aegis-recipe"
 
 # Cross toolchain prefix. Prefer the bare-metal aarch64-elf toolchain (Homebrew
 # on macOS); fall back to the Linux-hosted aarch64-linux-gnu cross (Debian:
@@ -83,22 +96,35 @@ build_musl_sysroot() {
     if [ -f "$SYSROOT_USR/lib/libc.a" ] \
        && [ -f "$SYSROOT_USR/lib/crt1.o" ] \
        && [ -f "$SYSROOT_USR/include/stdio.h" ] \
-       && [ -x "$CC_WRAPPER" ]; then
+       && [ -x "$CC_WRAPPER" ] \
+       && [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$RECIPE_ID" ]; then
         log "musl sysroot already present at $SYSROOT_USR — skipping build"
         return 0
     fi
 
     log "building aarch64 musl sysroot at $SYSROOT_USR"
 
-    if [ ! -d "$MUSL_SRC" ]; then
-        if [ ! -f "$MUSL_TAR" ]; then
-            log "downloading musl $MUSL_VER"
-            mkdir -p "$REPO/references"
-            curl -L -o "$MUSL_TAR" "https://musl.libc.org/releases/musl-$MUSL_VER.tar.gz"
-        fi
-        log "extracting musl $MUSL_VER"
-        tar -xzf "$MUSL_TAR" -C "$REPO/references/"
+    if [ ! -f "$MUSL_TAR" ]; then
+        log "downloading musl $MUSL_VER"
+        mkdir -p "$REPO/references"
+        curl -fL -o "$MUSL_TAR.tmp" "https://musl.libc.org/releases/musl-$MUSL_VER.tar.gz"
+        mv "$MUSL_TAR.tmp" "$MUSL_TAR"
     fi
+    python3 - "$MUSL_TAR" "$PATCH_HELPER" <<'PY'
+import hashlib
+from pathlib import Path
+import runpy
+import sys
+expected = runpy.run_path(sys.argv[2])["TARBALL_SHA256"]
+if hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest() != expected:
+    sys.exit("[build-arm64-userland] musl tarball SHA256 mismatch")
+PY
+    # Use the same Aegis spawn/DNS fixes as x86. Independent children cannot
+    # write upstream musl's spawn status pipe without explicit authority.
+    rm -rf "$REPO/build/musl-arm64-source"
+    mkdir -p "$REPO/build/musl-arm64-source"
+    tar -xzf "$MUSL_TAR" -C "$REPO/build/musl-arm64-source"
+    python3 "$PATCH_HELPER" "$MUSL_SRC"
 
     local build_dir="$REPO/build/musl-arm64-obj"
     rm -rf "$build_dir"
@@ -188,6 +214,7 @@ if [ -n "\$out_flag" ]; then cmd+=(-o "\$out_flag"); fi
 exec "\${cmd[@]}"
 WEOF
     chmod +x "$CC_WRAPPER"
+    printf '%s\n' "$RECIPE_ID" > "$STAMP"
 
     log "musl sysroot ready: $(file "$SYSROOT_USR/lib/libc.a" 2>/dev/null | head -1)"
 }

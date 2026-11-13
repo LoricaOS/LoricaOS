@@ -165,7 +165,10 @@ static sigset_t test_all_signals;
         executable = root / "test"
         cmd = shlex.split(os.environ.get("CC", "cc"))
         # Upstream deliberately uses i-32<3U to test musl's internal signals.
-        cmd += ["-O2", "-Wall", "-Wextra", "-Werror", "-Wno-sign-compare",
+        # musl 1.2.5 targets C99; use GNU C11 for this _Noreturn host model,
+        # not the host compiler's default (GCC 15+ defaults to C23, which
+        # changes the meaning of upstream's old-style function pointer).
+        cmd += ["-std=gnu11", "-O2", "-Wall", "-Wextra", "-Werror", "-Wno-sign-compare",
                 "-I" + str(root),
                 str(TOOLS / "musl-spawn-test.c"), "-o", str(executable)]
         subprocess.run(cmd, check=True)

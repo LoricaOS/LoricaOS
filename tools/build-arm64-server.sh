@@ -21,9 +21,10 @@
 #   ~/loricaos-arm64-server.iso       the bootable UEFI ISO
 set -euo pipefail
 
-REPO="${REPO:-/root/loricaos}"
-COREUTILS="${COREUTILS:-/root/coreutils}"
-AEGIS="${AEGIS:-/root/aegis}"
+REPO="${REPO:-$(cd "$(dirname "$0")/.." && pwd)}"
+COREUTILS="${COREUTILS:-$REPO/../coreutils}"
+AEGIS="${AEGIS:-$REPO/../Aegis}"
+MKE2FS="${MKE2FS:-mke2fs}"
 SYSROOT="$REPO/build/musl-arm64"
 CC="$SYSROOT/bin/aarch64-musl-gcc"
 BLOBS="$REPO/build/blobs-arm64"
@@ -66,18 +67,22 @@ else
     log "SKIP sh (compile failed)"
 fi
 
-# libinstall.a + tools that use it (adminpw, useradd). crypt() is in musl's libc.
+# Base account utilities need no disk-copy/encrypted-root installer backend
+# (copy.c now requires BearSSL). Build the required subset explicitly.
+# crypt() is in musl's libc.
 LI_DIR="$REPO/user/lib/libinstall"
-LI_LIB="$BLOBS/libinstall.a"
+LI_LIB="$BLOBS/libinstall-base.a"
 li_objs=""
-for f in config copy credentials gpt install_elevate run; do
+for f in config credentials gpt install_elevate run; do
     if "$CC" -c -O2 -I"$LI_DIR" -o "/tmp/li-$f.o" "$LI_DIR/$f.c" 2>"/tmp/arm64-li-$f.err"; then
         li_objs="$li_objs /tmp/li-$f.o"
     else
         log "libinstall: $f.c failed (see /tmp/arm64-li-$f.err)"
+        exit 1
     fi
 done
 if [ -n "$li_objs" ]; then
+    rm -f "$LI_LIB"
     aarch64-linux-gnu-ar rcs "$LI_LIB" $li_objs && log "built libinstall.a"
     for t in "${INSTALL_TOOLS[@]}"; do
         if "$CC" -O2 -Wall -I"$LI_DIR" -o "$BLOBS/$t.bin" "$REPO/user/bin/$t/main.c" "$LI_LIB" 2>"/tmp/arm64-$t.err"; then
@@ -203,7 +208,7 @@ log "rootfs has $(ls "$STAGE/bin" | wc -l | tr -d ' ') binaries in /bin"
 #    (ramdisk root), matching the arm64 kernel's boot path.
 log "== ext2 image =="
 rm -f "$OUT_EXT2"
-/sbin/mke2fs -q -t ext2 -b 4096 -i 32768 -d "$STAGE" -L aegis-arm64 "$OUT_EXT2" 64M
+"$MKE2FS" -q -t ext2 -b 4096 -i 32768 -d "$STAGE" -L aegis-arm64 "$OUT_EXT2" 64M
 log "rootfs.ext2: $(stat -c%s "$OUT_EXT2") bytes"
 
 # 6. UEFI ISO: kernel + rootfs-as-module, booted via Limine (aarch64).
