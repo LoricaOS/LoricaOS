@@ -414,7 +414,7 @@ SKELETON_FILES_DESKTOP := $(shell find rootfs-desktop -type f 2>/dev/null)
 # fetch unpacks coreutils.hpkg's /bin payload into vendor/coreutils/bin/; the
 # rootfs.manifest entries point there, so MANIFEST_SRCS_BASE lists those files as
 # prereqs and this pattern rule satisfies them from the fetch stamp.
-vendor/coreutils/.fetched: COREUTILS_VERSION tools/fetch-coreutils.sh
+vendor/coreutils/.fetched: COREUTILS_VERSION tools/fetch-coreutils.sh tools/coreutils.sha256
 	bash tools/fetch-coreutils.sh
 vendor/coreutils/bin/%: vendor/coreutils/.fetched
 	@test -f '$@' || { echo "coreutils: $@ missing from fetched package" >&2; exit 1; }

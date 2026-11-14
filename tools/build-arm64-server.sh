@@ -50,12 +50,18 @@ SIMPLE_TOOLS=(vigictl hostname reboot shutdown aegisctl chronos ip dhcp httpd)
 # 'configure' is the Pi first-boot account setup (thin UI over libinstall); it
 # builds exactly like adminpw/useradd (crypt() comes from musl libc, no -lcrypt).
 INSTALL_TOOLS=(adminpw useradd configure)
+# Never let a failed/omitted compile below publish a previous run's binary.
+# Core boot blobs were rebuilt above; these optional tools are rebuilt here.
+for t in "${SIMPLE_TOOLS[@]}" "${INSTALL_TOOLS[@]}" sh herald curl; do
+    rm -f "$BLOBS/$t.bin"
+done
 for t in "${SIMPLE_TOOLS[@]}"; do
     src="$REPO/user/bin/$t/main.c"
     [ -f "$src" ] || { log "SKIP $t (no main.c)"; continue; }
     if "$CC" -O2 -Wall -o "$BLOBS/$t.bin" "$src" 2>"/tmp/arm64-$t.err"; then
         "$STRIP" -s "$BLOBS/$t.bin"; log "built $t"
     else
+        rm -f "$BLOBS/$t.bin"
         log "SKIP $t (compile failed; see /tmp/arm64-$t.err)"
     fi
 done
@@ -63,12 +69,15 @@ done
 if "$CC" -O2 -Wall -o "$BLOBS/sh.bin" "$REPO/user/bin/shell/main.c" 2>/tmp/arm64-sh.err; then
     "$STRIP" -s "$BLOBS/sh.bin"; log "built sh"
 else
+    rm -f "$BLOBS/sh.bin"
     log "SKIP sh (compile failed)"
 fi
 
 # libinstall.a + tools that use it (adminpw, useradd). crypt() is in musl's libc.
 LI_DIR="$REPO/user/lib/libinstall"
 LI_LIB="$BLOBS/libinstall.a"
+# ar rcs updates members, it does not remove members absent from this run.
+rm -f "$LI_LIB"
 li_objs=""
 for f in config copy credentials gpt install_elevate run; do
     if "$CC" -c -O2 -I"$LI_DIR" -o "/tmp/li-$f.o" "$LI_DIR/$f.c" 2>"/tmp/arm64-li-$f.err"; then
@@ -83,6 +92,7 @@ if [ -n "$li_objs" ]; then
         if "$CC" -O2 -Wall -I"$LI_DIR" -o "$BLOBS/$t.bin" "$REPO/user/bin/$t/main.c" "$LI_LIB" 2>"/tmp/arm64-$t.err"; then
             "$STRIP" -s "$BLOBS/$t.bin"; log "built $t"
         else
+            rm -f "$BLOBS/$t.bin"
             log "SKIP $t (see /tmp/arm64-$t.err)"
         fi
     done
