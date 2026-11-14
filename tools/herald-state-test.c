@@ -131,6 +131,30 @@ int main(int argc, char **argv)
     assert(access(HERALD_UPDATE_PENDING, F_OK) != 0);
     assert(access(HERALD_TXN_DIR, F_OK) != 0);
     equals("/bin/victim", "original");
+    /* A file transferred from package A to B is deleted then replaced in one
+     * transaction. Rollback must restore the original, not replay R then N
+     * and unlink it. Exercise both explicit rollback and crash recovery. */
+    for (int recovery = 0; recovery < 2; recovery++) {
+        put("/bin/transferred", "original owner A");
+        put(HERALD_DB_DIR "/owners/owner-a.list", "bin/transferred\n");
+        assert(txn_begin() == 0);
+        assert(txn_remove_owned("owner-a") == 0);
+        stage("bin/transferred", "replacement owner B");
+        stage(HERALD_UPDATE_PENDING + 1, "pending\n");
+        assert(txn_commit() == 0 && txn_recover() == 1);
+        equals("/bin/transferred", "replacement owner B");
+        if (recovery) {
+            put(HERALD_TXN_DIR "/state", "applying\n");
+            assert(txn_recover() == 0);
+        } else {
+            assert(txn_rollback() == 0);
+        }
+        equals("/bin/transferred", "original owner A");
+        equals(HERALD_DB_DIR "/owners/owner-a.list", "bin/transferred\n");
+        assert(access(HERALD_UPDATE_PENDING, F_OK) != 0);
+        assert(txn_recover() == 0);
+        equals("/bin/transferred", "original owner A");
+    }
     puts("herald state: forged legacy inputs ignored; protected commit/recovery/rollback/owners PASS");
     return 0;
 }

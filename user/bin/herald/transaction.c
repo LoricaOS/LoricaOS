@@ -158,10 +158,20 @@ static int prepare_target(int jfd, const char *rel)
 
 static int apply_delete(int jfd, const char *rel)
 {
-    char dst[TXN_PATH_MAX];
+    char dst[TXN_PATH_MAX], staged[TXN_PATH_MAX];
     struct stat st;
     if (!safe_rel(rel) || snprintf(dst, sizeof(dst), "/%s", rel) >= (int)sizeof(dst))
         return -1;
+    /* A multi-package upgrade may transfer a path from one owner to another.
+     * Its staged replacement supersedes the deletion. Leave the original in
+     * place until apply_stage_dir snapshots and replaces it once: deleting it
+     * here would journal R, then stage would journal N, and forward rollback
+     * would restore and immediately unlink the original. This also avoids a
+     * missing-file window during an otherwise successful ownership transfer. */
+    if (txn_stage_path(staged, sizeof(staged), rel) != 0) return -1;
+    if (lstat(staged, &st) == 0)
+        return S_ISREG(st.st_mode) ? 0 : -1;
+    if (errno != ENOENT) return -1;
     if (lstat(dst, &st) != 0) return errno == ENOENT ? 0 : -1;
     if (!S_ISREG(st.st_mode) || prepare_target(jfd, rel) != 0) return -1;
     return unlink(dst);
