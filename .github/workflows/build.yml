@@ -29,6 +29,8 @@ jobs:
         run: make -C user/lib/glyph test
       - name: Herald protected-state regression
         run: sudo bash tools/test-herald-state.sh
+      - name: Herald mutable-download regression
+        run: python3 tools/test-herald-fetch.py
 
   # ── x86-64: desktop + server ISOs ──────────────────────────────────────
   x86:
